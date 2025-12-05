@@ -39,28 +39,28 @@ git pull origin main
 ```
 
 2. **실험 브랜치 생성**
-브랜치명 형식: `exp-{n}-{간단한 설명}`
+브랜치명 형식: `{팀원들의 이니셜}-{issue num}`
 
 ```bash
-git checkout -b exp-1-bert-baseline
-git checkout -b exp-2-roberta-large
-git checkout -b exp-3-data-augmentation
+git checkout -b ke-12
+git checkout -b xyz-15
+git checkout -b abc-20
 ```
 
 3. **실험 폴더 생성**
 브랜치를 생성한 후, 각 실험별로 폴더를 만듭니다.
-폴더명 형식: `exp-{n}`
+폴더명 형식: `{팀원들의 이니셜}-{issue num}` (브랜치명과 동일)
 
 ```bash
-mkdir exp-1
-mkdir exp-2
-mkdir exp-3
+mkdir ke-12
+mkdir xyz-15
+mkdir abc-20
 ```
 
 ### 브랜치 및 폴더 예시
-- 브랜치: `exp-1-bert-baseline` → 폴더: `exp-1/`
-- 브랜치: `exp-2-roberta-large` → 폴더: `exp-2/`
-- 브랜치: `exp-3-data-augmentation` → 폴더: `exp-3/`
+- 브랜치: `ke-12` → 폴더: `ke-12/`
+- 브랜치: `xyz-15` → 폴더: `xyz-15/`
+- 브랜치: `abc-20` → 폴더: `abc-20/`
 
 ### 브랜치 작업 흐름
 ```bash
@@ -69,18 +69,18 @@ git checkout main
 git pull origin main
 
 # 2. 새 실험 브랜치 생성
-git checkout -b exp-4-new-model
+git checkout -b ke-25
 
 # 3. 실험 폴더 생성
-mkdir exp-4
+mkdir ke-25
 
 # 4. 작업 및 커밋
 # ... 코드 작성 ...
 git add .
-git commit -m "[FEAT] exp-4 실험 코드 추가"
+git commit -m "[FEAT] ke-25 실험 코드 추가"
 
 # 5. 브랜치 푸시
-git push origin exp-4-new-model
+git push origin ksh-25
 ```
 
 ## 커밋 메시지 작성 가이드
