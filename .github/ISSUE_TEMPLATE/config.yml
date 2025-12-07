@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 실험 관련 질문
+    url: https://github.com/boostcampaitech8/pro-nlp-mrc-nlp-07/issues/new?template=experiment.md
+    about: 새로운 실험을 시작할 때 이 템플릿을 사용하세요
+  - name: 버그 리포트
+    url: https://github.com/boostcampaitech8/pro-nlp-mrc-nlp-07/issues/new?template=bug_report.md
+    about: 버그를 발견했을 때 이 템플릿을 사용하세요
+  - name: 기능 요청
+    url: https://github.com/boostcampaitech8/pro-nlp-mrc-nlp-07/issues/new?template=feature_request.md
+    about: 새로운 기능이나 개선사항을 제안할 때 이 템플릿을 사용하세요
+
