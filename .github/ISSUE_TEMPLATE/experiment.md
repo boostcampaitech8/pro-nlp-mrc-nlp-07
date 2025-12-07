@@ -6,7 +6,7 @@ labels: experiment
 assignees: ''
 ---
 
-## 실험 개요
+## 실험 상세
 
 ### 실험 목적
 <!-- 이 실험의 목적과 기대 효과를 설명해주세요 -->
@@ -15,30 +15,58 @@ assignees: ''
 <!-- 실험에 대한 상세 설명을 작성해주세요 -->
 
 
-## 실험 설정
+## 데이터 처리 및 증강
+
+### 원본 데이터
+- **데이터셋**: 
+- **데이터 개수**: 
+- **데이터 전처리 방법**: 
+
+### 데이터 증강
+- **증강 방법**: 
+  - 예: 원본 데이터(4000) + KorQuAD(1) + Negative(n=8)
+- **증강된 데이터 개수**: 
+- **증강 상세 설정**: 
+
+
+## Retriever 구성
+
+### Retriever 타입
+- [ ] Sparse Retrieval (TF-IDF, BM25)
+- [ ] Dense Retrieval (DPR, Dense Embedding)
+- [ ] Hybrid Retrieval
+- [ ] Elasticsearch
+- [ ] 기타: 
+
+### Retriever 설정
+- **모델/방법**: 
+- **Top-K**: 
+- **하이퍼파라미터**: 
+- **추가 설정**: 
+
+
+## Reader 구성
 
 ### 모델 정보
-- **모델명**: 
 - **베이스 모델**: 
+  - 예: klue-roberta-large
 - **모델 경로/저장소**: 
 
-### 하이퍼파라미터
+### 학습 설정
+- **Pre-training/TAPT**: 
 - **학습률 (learning_rate)**: 
 - **배치 사이즈 (batch_size)**: 
 - **에폭 (epochs)**: 
 - **최대 시퀀스 길이 (max_seq_length)**: 
-- **기타 설정**: 
-
-### 데이터
-- **데이터셋**: 
-- **데이터 전처리 방법**: 
+- **기타 하이퍼파라미터**: 
 
 
 ## 실험 계획
 
 ### 실험 단계
-- [ ] 데이터 전처리
-- [ ] 모델 학습
+- [ ] 데이터 전처리 및 증강
+- [ ] Retriever 학습/구성
+- [ ] Reader 학습
 - [ ] 모델 평가
 - [ ] 결과 분석
 - [ ] Hugging Face Hub 업로드
