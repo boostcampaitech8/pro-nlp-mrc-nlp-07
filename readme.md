@@ -5,7 +5,7 @@
 ### 1. 프로젝트 클론
 ```bash
 cd /data/ephemeral/home/{자신의 캠퍼 아이디}/
-git clone https://github.com/boostcampaitech8/pro-nlp-mrc-nlp-07.git
+git clone https://{git username}:{PAT (github token (classic 추천))}@github.com/boostcampaitech8/pro-nlp-mrc-nlp-07.git
 cd pro-nlp-mrc-nlp-07
 ```
 
