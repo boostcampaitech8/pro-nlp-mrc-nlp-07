@@ -2,7 +2,6 @@ import os
 from huggingface_hub import login
 from transformers import AutoModelForQuestionAnswering, AutoTokenizer
 
-
 # ======================================================
 # 1. Hugging Face 토큰 (Write 권한 필수!)
 HF_TOKEN = "hf_@@@@@" 

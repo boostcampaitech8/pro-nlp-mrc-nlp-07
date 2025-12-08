@@ -11,10 +11,9 @@ OUTPUT_FILE = "final_submission_hard.csv" # 최종 저장될 파일명
 
 # 우선순위 파일명 리스트 (확장자 포함 정확히)
 priority_order = [
+    'predictions_submit_71.25.csv', 
     'predictions_submit_65.42.csv', 
-    'predictions_submit_64.17.csv', 
-    'predictions_submit_64.17(2).csv',
-    'predictions_submit_60.42.csv'
+    'predictions_submit_64.17.csv'
 ]
 # ==========================================
 
