@@ -118,7 +118,7 @@ def run_sparse_retrieval(
     retriever = ElasticSearchRetrieval(
         data_path=data_path,
         context_path=context_path,
-        rerank_model_path="Dongjin-kr/ko-reranker" # 아까 학습시킨 모델 경로 지정
+        rerank_model_path="Dongjin-kr/ko-reranker"
     )
     
     # ES 방식에서는 get_sparse_embedding()이 필요 없으므로 주석 처리하거나 무시됩니다.
