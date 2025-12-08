@@ -2,11 +2,10 @@ import os
 from huggingface_hub import login
 from transformers import AutoModelForQuestionAnswering, AutoTokenizer
 
-# ======================================================
-# [설정] 여기만 수정하세요!
+
 # ======================================================
 # 1. Hugging Face 토큰 (Write 권한 필수!)
-HF_TOKEN = "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" 
+HF_TOKEN = "hf_@@@@@" 
 
 # 2. 업로드할 로컬 모델 폴더 (학습 완료된 폴더 경로)
 LOCAL_MODEL_PATH = "./models/roberta_large_tapt_qa" 
