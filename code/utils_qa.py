@@ -42,7 +42,6 @@ def set_seed(seed: int = 42):
     Args:
         seed (:obj:`int`): The seed to set.
     """
-    logger.info(f"Setting random seed to {seed} for reproducibility")
     random.seed(seed)
     np.random.seed(seed)
     if is_torch_available():
@@ -51,7 +50,6 @@ def set_seed(seed: int = 42):
         torch.cuda.manual_seed_all(seed)  # if use multi-GPU
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        logger.info("PyTorch random seeds and CUDNN settings configured")
 
 
 def postprocess_qa_predictions(
@@ -123,7 +121,6 @@ def postprocess_qa_predictions(
     logger.info(
         f"Post-processing {len(examples)} example predictions split into {len(features)} features."
     )
-    logger.info(f"Post-processing parameters: n_best_size={n_best_size}, max_answer_length={max_answer_length}")
 
     # 전체 example들에 대한 main Loop
     for example_index, example in enumerate(tqdm(examples)):

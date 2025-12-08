@@ -9,7 +9,7 @@ class ModelArguments:
     """
 
     model_name_or_path: str = field(
-        default="klue/bert-base",
+        default="klue/roberta-large", # 모델 수정
         metadata={
             "help": "Path to pretrained model or model identifier from huggingface.co/models"
         },
@@ -26,30 +26,6 @@ class ModelArguments:
             "help": "Pretrained tokenizer name or path if not the same as model_name"
         },
     )
-    hub_repo_id: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "The repository id on Hugging Face Hub to push the model to. Format: 'model-name' (will be uploaded to NLP-07-ODQA organization) or 'organization/model-name'. Use --push_to_hub flag from TrainingArguments to enable upload."
-        },
-    )
-    hub_model_repo_id: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Hugging Face Hub repository ID to download model from. Format: 'organization/model-name' or 'model-name' (will search in NLP-07-ODQA organization). Used in inference.py to download model from Hub."
-        },
-    )
-    hub_model_revision: Optional[str] = field(
-        default="main",
-        metadata={
-            "help": "Revision (branch or commit) of the Hugging Face Hub model to download. Default is 'main'. Can be a branch name like 'checkpoint-1000'."
-        },
-    )
-    hub_model_cache_dir: Optional[str] = field(
-        default="./models",
-        metadata={
-            "help": "Local directory to cache downloaded Hugging Face models. Models will be saved in subdirectories named after the repo_id."
-        },
-    )
 
 
 @dataclass
@@ -59,7 +35,7 @@ class DataTrainingArguments:
     """
 
     dataset_name: Optional[str] = field(
-        default="../data/train_dataset",
+        default="../data/train_dataset_korquad",
         metadata={"help": "The name of the dataset to use."},
     )
     overwrite_cache: bool = field(

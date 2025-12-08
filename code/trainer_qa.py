@@ -16,13 +16,9 @@
 Question-Answering task와 관련된 'Trainer'의 subclass 코드 입니다.
 """
 
-import logging
-
 from transformers import Trainer, is_datasets_available
 from transformers.utils import is_torch_xla_available
 from transformers.trainer_utils import PredictionOutput
-
-logger = logging.getLogger(__name__)
 
 if is_datasets_available():
     import datasets
@@ -35,18 +31,14 @@ if is_torch_xla_available():
 # Huggingface의 Trainer를 상속받아 QuestionAnswering을 위한 Trainer를 생성합니다.
 class QuestionAnsweringTrainer(Trainer):
     def __init__(self, *args, eval_examples=None, post_process_function=None, **kwargs):
-        logger.info("Initializing QuestionAnsweringTrainer")
         super().__init__(*args, **kwargs)
         self.eval_examples = eval_examples
         self.post_process_function = post_process_function
-        logger.info("QuestionAnsweringTrainer initialized with custom eval_examples and post_process_function")
 
     def evaluate(self, eval_dataset=None, eval_examples=None, ignore_keys=None):
-        logger.info("Starting evaluation process")
         eval_dataset = self.eval_dataset if eval_dataset is None else eval_dataset
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
         eval_examples = self.eval_examples if eval_examples is None else eval_examples
-        logger.info(f"Evaluating on {len(eval_dataset)} examples")
 
         # 일시적으로 metric computation를 불가능하게 한 상태이며, 해당 코드에서는 loop 내에서 metric 계산을 수행합니다.
         compute_metrics = self.compute_metrics
@@ -89,7 +81,6 @@ class QuestionAnsweringTrainer(Trainer):
         return metrics
 
     def predict(self, test_dataset, test_examples, ignore_keys=None):
-        logger.info(f"Starting prediction on {len(test_dataset)} examples")
         test_dataloader = self.get_test_dataloader(test_dataset)
 
         # 일시적으로 metric computation를 불가능하게 한 상태이며, 해당 코드에서는 loop 내에서 metric 계산을 수행합니다.
