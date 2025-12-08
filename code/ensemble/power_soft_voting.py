@@ -18,9 +18,8 @@ POWER = 2.0
 # 2. 모델별 가중치 설정 (파일명의 일부분을 키값으로 사용)
 # 압도적 1등 모델에는 높은 가중치를, 나머지는 1.0을 줍니다.
 MODEL_WEIGHTS = {
-    "71.25": 2.0,   # 예: predictions_submit_71.25.json (Ace)
-    "65.42": 1.0,   # 예: predictions_submit_65.42.json (Helper)
-    "64.17": 1.0,   # 예: predictions_submit_64.17.json (Helper)
+    "71.25": 1.5,   # 예: predictions_submit_71.25.json (Ace)
+    "69.58": 1.0,   # 예: predictions_submit_65.42.json (Helper)
     # 파일명에 위 키워드가 없으면 기본값 1.0 적용
 }
 
