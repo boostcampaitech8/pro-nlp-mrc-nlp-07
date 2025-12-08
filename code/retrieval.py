@@ -67,6 +67,11 @@ class SparseRetrieval:
         print(f"Lengths of unique contexts : {len(self.contexts)}")
         self.ids = list(range(len(self.contexts)))
 
+        # ⭐⭐⭐ 변경 1: Context 텍스트 -> ID 매핑 딕셔너리 생성 ⭐⭐⭐
+        self.context_to_id = {
+            text: i for i, text in enumerate(self.contexts)
+        }
+
         # Transform by vectorizer
         self.tfidfv = TfidfVectorizer(
             tokenizer=tokenize_fn,
@@ -194,6 +199,9 @@ class SparseRetrieval:
                 doc_scores, doc_indices = self.get_relevant_doc_bulk(
                     query_or_dataset["question"], k=topk
                 )
+
+            # ⭐⭐ 로그용: 실패한 ID를 저장할 리스트 정의
+            failed_ids = []
             for idx, example in enumerate(
                 tqdm(query_or_dataset, desc="Sparse retrieval: ")
             ):
@@ -210,6 +218,37 @@ class SparseRetrieval:
                     # validation 데이터를 사용하면 ground_truth context와 answer도 반환합니다.
                     tmp["original_context"] = example["context"]
                     tmp["answers"] = example["answers"]
+
+                    # ⭐⭐⭐ 변경 2: Hit@K 계산 로직 추가 시작 (Exhaustive Search) ⭐⭐⭐
+                    original_context_id = self.context_to_id.get(tmp["original_context"])
+                    is_hit_at_k = original_context_id in doc_indices[idx]
+                    tmp["is_hit_at_k"] = is_hit_at_k # Hit@K 결과를 DataFrame에 추가
+                    
+                    # ⭐⭐⭐ 정답 문서 획득 실패 시 로그 기록 로직 시작 ⭐⭐⭐
+                    if not is_hit_at_k:
+                        # ⭐⭐ 로그용: 실패 ID 리스트에 현재 ID 추가
+                        failed_ids.append(tmp['id'])
+
+                        # Top-K 문맥 인덱스 리스트 (doc_indices[idx])를 사용하여 점수와 함께 출력
+                        doc_scores_list = doc_scores[idx] # 이전에 get_relevant_doc_bulk에서 얻은 점수 리스트
+                        
+                        logger.error("-" * 60)
+                        logger.error(f"🚨 RETRIEVAL FAILURE (K={topk}) for ID: {tmp['id']}")
+                        logger.error(f"  QUESTION: {tmp['question']}")
+                        logger.error(f"  TARGET CONTEXT (GT): {tmp['original_context']}")
+                        logger.error(f"  --- Top {topk} Retrieved Contexts and Scores ---")
+                        
+                        # K개의 문맥을 순위, 점수와 함께 로그에 상세 기록
+                        for rank in range(topk):
+                            context = self.contexts[doc_indices[idx][rank]]
+                            score = doc_scores_list[rank] # 해당 순위의 점수 사용
+                            
+                            # 점수와 함께 출력
+                            logger.error(f"  Rank {rank+1} (Score: {score:.4f}): {context}")
+                            
+                        logger.error("-" * 60)
+                    # ⭐⭐⭐ 로그 기록 로직 종료 ⭐⭐⭐
+
                 total.append(tmp)
 
             cqas = pd.DataFrame(total)

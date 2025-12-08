@@ -174,6 +174,19 @@ def run_sparse_retrieval(
     else:
         df = retriever.retrieve(datasets["validation"], topk=data_args.top_k_retrieval)
 
+    # ⭐⭐⭐ Top-k 정확도 (Hit@K) 계산 및 출력 ⭐⭐⭐
+    if 'is_hit_at_k' in df.columns:
+        # True 값의 합계를 전체 데이터셋 길이로 나누어 정확도를 계산
+        top_k_accuracy = df["is_hit_at_k"].sum() / len(df)
+        # 결과 출력
+        print("=" * 60)
+        print(f"🎯 Retriever Evaluation Results (Top-K={data_args.top_k_retrieval})")
+        print(f"   Total Queries: {len(df)}")
+        print(f"   Top-K Hit Count: {df['is_hit_at_k'].sum()}")
+        print(f"   Top-K Accuracy (Hit@K): {top_k_accuracy:.4f}")
+        print("=" * 60)
+        df = df.drop(columns=['is_hit_at_k'])
+        
     # test data 에 대해선 정답이 없으므로 id question context 로만 데이터셋이 구성됩니다.
     if training_args.do_predict:
         f = Features(
@@ -201,6 +214,10 @@ def run_sparse_retrieval(
                 "question": Value(dtype="string", id=None),
             }
         )
+        # ⭐⭐⭐ 해결 코드 추가: 불필요한 컬럼 제거
+        if 'original_context' in df.columns:
+            df = df.drop(columns=['original_context'])
+
     datasets = DatasetDict({"validation": Dataset.from_pandas(df, features=f)})
     return datasets
 
