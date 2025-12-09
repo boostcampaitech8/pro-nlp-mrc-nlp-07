@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from datasets import Dataset, concatenate_datasets, load_from_disk
 from sklearn.feature_extraction.text import TfidfVectorizer
+from rank_bm25 import BM25Okapi, BM25Plus, BM25L
 from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,274 @@ def timer(name):
     yield
     print(f"[{name}] done in {time.time() - t0:.3f} s")
 
+# retrieval.py
+
+class BM25Retriever:
+    def __init__(
+        self,
+        tokenize_fn,
+        data_path: Optional[str] = "./data",
+        context_path: Optional[str] = "wikipedia_documents.json",
+    ) -> NoReturn:
+        
+        self.tokenize_fn = tokenize_fn  # 토크나이저 함수 저장
+        self.data_path = data_path
+        
+        # 데이터 로드 (SparseRetrieval과 동일)
+        with open(os.path.join(data_path, context_path), "r", encoding="utf-8") as f:
+            wiki = json.load(f)
+
+        self.contexts = list(
+            dict.fromkeys([v["text"] for v in wiki.values()])
+        )
+        logger.info(f"Initialized BM25Retriever with {len(self.contexts)} unique contexts")
+        self.ids = list(range(len(self.contexts)))
+
+        self.context_to_id = {
+            text: i for i, text in enumerate(self.contexts)
+        }
+
+        # ⭐ BM25 전용: Context를 토큰화합니다.
+        print("Tokenizing contexts for BM25...")
+        self.tokenized_contexts = [
+            self.tokenize_fn(doc) for doc in tqdm(self.contexts, desc="Tokenizing")
+        ]
+        
+        self.bm25_model = None
+        self.get_bm25_model() # 모델 생성/로드 함수 호출
+
+    def get_bm25_model(self) -> NoReturn:
+        """BM25 모델을 만들고 pickle로 저장하거나 로드합니다."""
+
+        pickle_name = f"bm25_model.bin"
+        emd_path = os.path.join(self.data_path, pickle_name)
+
+        if os.path.isfile(emd_path):
+            logger.info("Loading pre-computed BM25 model from cache")
+            with open(emd_path, "rb") as file:
+                self.bm25_model = pickle.load(file)
+            print("BM25 model pickle load.")
+        else:
+            logger.info("Computing BM25 model for passages")
+            print("Building BM25 model")
+            
+            self.bm25_model = BM25Okapi(self.tokenized_contexts)
+            
+            with open(emd_path, "wb") as file:
+                pickle.dump(self.bm25_model, file)
+            print("BM25 model pickle saved.")
+
+    # SparseRetrieval의 retrieve 함수 로직을 그대로 가져오되, 내부 스코어링 함수만 BM25 버전으로 대체
+    def retrieve(
+        self, query_or_dataset: Union[str, Dataset], topk: Optional[int] = 1
+    ) -> Union[Tuple[List, List], pd.DataFrame]:
+        
+        assert (
+            self.bm25_model is not None
+        ), "get_bm25_model() 메소드를 먼저 수행해줘야합니다. (BM25 모델 로드)"
+
+        # 단일 쿼리 처리
+        if isinstance(query_or_dataset, str):
+            doc_scores, doc_indices = self.get_relevant_doc_bm25(query_or_dataset, k=topk)
+            print("[Search query]\n", query_or_dataset, "\n")
+
+            for i in range(topk):
+                print(f"Top-{i+1} passage with score {doc_scores[i]:4f}")
+                print(self.contexts[doc_indices[i]])
+
+            return (doc_scores, [self.contexts[doc_indices[i]] for i in range(topk)])
+
+        # bulk 쿼리 처리
+        elif isinstance(query_or_dataset, Dataset):
+            total = []
+            with timer("query BM25 search"):
+                doc_scores, doc_indices = self.get_relevant_doc_bulk_bm25(
+                    query_or_dataset["question"], k=topk
+                )
+
+            # ⭐⭐ 로그용: 실패한 ID를 저장할 리스트 정의
+            failed_ids = []
+            failed_lens = []
+            # Hit@K 계산 및 결과 DataFrame 생성
+            for idx, example in enumerate(
+                tqdm(query_or_dataset, desc="BM25 retrieval: ")
+            ):
+                tmp = {
+                    "question": example["question"],
+                    "id": example["id"],
+                    "context": " ".join(
+                        [self.contexts[pid] for pid in doc_indices[idx]]
+                    ),
+                }
+                if "context" in example.keys() and "answers" in example.keys():
+                    tmp["original_context"] = example["context"]
+                    tmp["answers"] = example["answers"]
+
+                    original_context_id = self.context_to_id.get(tmp["original_context"])
+                    is_hit_at_k = original_context_id in doc_indices[idx]
+                    tmp["is_hit_at_k"] = is_hit_at_k
+                    
+                    # ⭐⭐⭐ 정답 문서 획득 실패 시 로그 기록 로직 시작 ⭐⭐⭐
+                    if not is_hit_at_k:
+                        # ⭐⭐ 로그용: 실패 ID 리스트에 현재 ID 추가
+                        failed_ids.append(tmp['id'])
+                        failed_lens.append(len(tmp['original_context']))
+
+                        # Top-K 문맥 인덱스 리스트 (doc_indices[idx])를 사용하여 점수와 함께 출력
+                        doc_scores_list = doc_scores[idx] # 이전에 get_relevant_doc_bulk에서 얻은 점수 리스트
+                        
+                        logger.error("-" * 60)
+                        logger.error(f"🚨 RETRIEVAL FAILURE (K={topk}) for ID: {tmp['id']}")
+                        logger.error(f"  QUESTION: {tmp['question']}")
+                        logger.error(f"  TARGET CONTEXT (GT): {tmp['original_context']}")
+                        logger.error(f"  CONTEXT LENGTH (GT): {len(tmp['original_context'])}")
+                        logger.error(f"  ANSWER : {tmp['answers']}")
+                        logger.error(f"  --- Top {topk} Retrieved Contexts and Scores ---")
+                        
+                        # K개의 문맥을 순위, 점수와 함께 로그에 상세 기록
+                        scores = []
+                        contentLens = []
+                        for rank in range(topk):
+                            context = self.contexts[doc_indices[idx][rank]]
+                            score = doc_scores_list[rank] # 해당 순위의 점수 사용
+                            
+                            # 점수 & 길이와 함께 출력
+                            scores.append(score)
+                            contentLens.append(len(context))
+                            #logger.error(f"  Rank {rank+1} (Score: {score:.4f}, Length: {len(context)}): {context}")
+                        
+                        logger.error(f"  Scores: {scores}")
+                        logger.error(f"  Content Lengths: {contentLens}")
+                        logger.error("-" * 60)
+                    # ⭐⭐⭐ 로그 기록 로직 종료 ⭐⭐⭐
+
+
+                total.append(tmp)
+
+            # ⭐⭐ 로그용: 루프 종료 후 실패 ID 목록 출력 ⭐⭐
+            if failed_ids:
+                logger.error("=" * 60)
+                logger.error(f"🚨 Total {len(failed_ids)} Retrieval Failures (K={topk})")
+                logger.error(f"   Failed IDs: {failed_ids}")
+                logger.error(f"   Failed Lens: {failed_lens}")
+                logger.error("=" * 60)
+
+            return pd.DataFrame(total)
+
+    def get_relevant_doc_bm25(self, query: str, k: Optional[int] = 1) -> Tuple[List, List]:
+        """하나의 쿼리에 대한 BM25 스코어링"""
+        
+        tokenized_query = self.tokenize_fn(query)
+        
+        with timer("query BM25 scoring"):
+            doc_scores = self.bm25_model.get_scores(tokenized_query)
+
+        sorted_result = np.argsort(doc_scores)[::-1]
+        
+        doc_score = doc_scores[sorted_result].tolist()[:k]
+        doc_indices = sorted_result.tolist()[:k]
+        
+        return doc_score, doc_indices
+
+    def get_relevant_doc_bulk_bm25(
+        self, queries: List, k: Optional[int] = 1
+    ) -> Tuple[List, List]:
+        """다수의 쿼리에 대한 BM25 스코어링"""
+        
+        doc_scores_list = []
+        doc_indices_list = []
+        
+        with timer("query BM25 bulk scoring"):
+            for query in tqdm(queries, desc="BM25 scoring"):
+                tokenized_query = self.tokenize_fn(query)
+                doc_scores = self.bm25_model.get_scores(tokenized_query)
+                
+                sorted_result = np.argsort(doc_scores)[::-1]
+                
+                doc_scores_list.append(doc_scores[sorted_result].tolist()[:k])
+                doc_indices_list.append(sorted_result.tolist()[:k])
+
+        return doc_scores_list, doc_indices_list
+    
+
+class BM25RetrieverPlus(BM25Retriever):
+    """
+    BM25Retriever를 상속받아 BM25+ 알고리즘을 사용하는 클래스
+    """
+    def get_bm25_model(self) -> NoReturn:
+        """
+        Overriding: BM25Plus 모델 생성 및 저장
+        """
+        # ⭐ 저장 파일명을 _plus 로 변경하여 충돌 방지
+        pickle_name = f"bm25_plus_model.bin"
+        emd_path = os.path.join(self.data_path, pickle_name)
+
+        if os.path.isfile(emd_path):
+            logger.info("Loading pre-computed BM25 Plus model from cache")
+            with open(emd_path, "rb") as file:
+                self.bm25_model = pickle.load(file)
+            print("BM25 Plus model loaded.")
+        else:
+            logger.info("Computing BM25 Plus model")
+            print("Building BM25 Plus model")
+            
+            # ⭐ BM25Plus 사용
+            # 파라미터 튜닝 가능: k1=1.5, b=0.75, delta=1.0 (기본값)
+            self.bm25_model = BM25Plus(self.tokenized_contexts, k1=1.5, b=0.75, delta=1.0)
+            
+            with open(emd_path, "wb") as file:
+                pickle.dump(self.bm25_model, file)
+            print("BM25 Plus model saved.")
+
+class BM25RetrieverL(BM25Retriever):
+    """
+    BM25Retriever를 상속받아 BM25L 알고리즘을 사용하는 클래스
+    """
+    def get_bm25_model(self) -> NoReturn:
+        """
+        Overriding: BM25L 모델 생성 및 저장
+        """
+        # ⭐ 저장 파일명을 _l 로 변경하여 충돌 방지
+        pickle_name = f"bm25_l_model.bin"
+        emd_path = os.path.join(self.data_path, pickle_name)
+
+        # BM25L의 기본 파라미터 (사용자가 제공한 코드의 기본값 활용)
+        k1_default = 1.5
+        b_default = 0.75
+        delta_default = 1
+
+        # BM25L 클래스 Import (사용자 환경의 BM25L 구현체를 사용)
+        try:
+            # 여기서는 BM25L이 rank_bm25가 아닌 다른 모듈에서 사용 가능하다고 가정합니다.
+            # 만약 import 문제가 발생한다면, BM25L 구현체를 이 파일에 직접 복사-붙여넣기 해야 합니다.
+            # 현재 코드에는 import rank_bm25에서 BM25L을 가져오는 구문이 없으므로,
+            # 실행 환경에서 BM25L이 자동으로 인식되거나, 별도로 import 되었다고 가정하고 진행합니다.
+            pass
+        except NameError:
+             logger.error("🚨 BM25L class not found. Ensure BM25L implementation is imported or defined.")
+             # 실행 불가능 시 예외 처리 필요
+
+        if os.path.isfile(emd_path):
+            logger.info("Loading pre-computed BM25 L model from cache")
+            with open(emd_path, "rb") as file:
+                self.bm25_model = pickle.load(file)
+            # 모델 로드 시 파라미터 정보도 출력하여 확인 용이하게 합니다.
+            print(f"BM25 L model loaded (k1={self.bm25_model.k1}, b={self.bm25_model.b}, delta={self.bm25_model.delta}).")
+        else:
+            logger.info("Computing BM25 L model")
+            print(f"Building BM25 L model with k1={k1_default}, b={b_default}, delta={delta_default}")
+            
+            # ⭐ BM25L 모델 인스턴스화
+            self.bm25_model = BM25L(
+                self.tokenized_contexts, 
+                k1=k1_default, 
+                b=b_default, 
+                delta=delta_default
+            )
+            
+            with open(emd_path, "wb") as file:
+                pickle.dump(self.bm25_model, file)
+            print("BM25 L model pickle saved.")
 
 class SparseRetrieval:
     def __init__(
@@ -202,6 +471,7 @@ class SparseRetrieval:
 
             # ⭐⭐ 로그용: 실패한 ID를 저장할 리스트 정의
             failed_ids = []
+            failed_lens = []
             for idx, example in enumerate(
                 tqdm(query_or_dataset, desc="Sparse retrieval: ")
             ):
@@ -228,6 +498,7 @@ class SparseRetrieval:
                     if not is_hit_at_k:
                         # ⭐⭐ 로그용: 실패 ID 리스트에 현재 ID 추가
                         failed_ids.append(tmp['id'])
+                        failed_lens.append(len(tmp['original_context']))
 
                         # Top-K 문맥 인덱스 리스트 (doc_indices[idx])를 사용하여 점수와 함께 출력
                         doc_scores_list = doc_scores[idx] # 이전에 get_relevant_doc_bulk에서 얻은 점수 리스트
@@ -236,20 +507,36 @@ class SparseRetrieval:
                         logger.error(f"🚨 RETRIEVAL FAILURE (K={topk}) for ID: {tmp['id']}")
                         logger.error(f"  QUESTION: {tmp['question']}")
                         logger.error(f"  TARGET CONTEXT (GT): {tmp['original_context']}")
+                        logger.error(f"  CONTEXT LENGTH (GT): {len(tmp['original_context'])}")
+                        logger.error(f"  ANSWER : {tmp['answers']}")
                         logger.error(f"  --- Top {topk} Retrieved Contexts and Scores ---")
                         
                         # K개의 문맥을 순위, 점수와 함께 로그에 상세 기록
+                        scores = []
+                        contentLens = []
                         for rank in range(topk):
                             context = self.contexts[doc_indices[idx][rank]]
                             score = doc_scores_list[rank] # 해당 순위의 점수 사용
                             
-                            # 점수와 함께 출력
-                            logger.error(f"  Rank {rank+1} (Score: {score:.4f}): {context}")
-                            
+                            # 점수 & 길이와 함께 출력
+                            scores.append(score)
+                            contentLens.append(len(context))
+                            #logger.error(f"  Rank {rank+1} (Score: {score:.4f}, Length: {len(context)}): {context}")
+                        
+                        logger.error(f"  Scores: {scores}")
+                        logger.error(f"  Content Lengths: {contentLens}")
                         logger.error("-" * 60)
                     # ⭐⭐⭐ 로그 기록 로직 종료 ⭐⭐⭐
 
                 total.append(tmp)
+
+            # ⭐⭐ 로그용: 루프 종료 후 실패 ID 목록 출력 ⭐⭐
+            if failed_ids:
+                logger.error("=" * 60)
+                logger.error(f"🚨 Total {len(failed_ids)} Retrieval Failures (K={topk})")
+                logger.error(f"   Failed IDs: {failed_ids}")
+                logger.error(f"   Failed Lens: {failed_lens}")
+                logger.error("=" * 60)
 
             cqas = pd.DataFrame(total)
             return cqas
