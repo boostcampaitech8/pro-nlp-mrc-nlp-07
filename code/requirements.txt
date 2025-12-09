@@ -1,6 +1,7 @@
 # torch==2.1.0
 
-transformers==4.39.3 -no-deps
+transformers==4.51.0 --no-deps
+tokenizers>=0.21,<0.22  # transformers 4.51.0 requirement
 accelerate==0.30.0 --no-deps
 pandas==2.3.3
 evaluate==0.4.6

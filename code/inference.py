@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, NoReturn, Tuple
 
 import evaluate
 import numpy as np
+import torch
 from arguments import DataTrainingArguments, ModelArguments
 from dotenv import load_dotenv
 from huggingface_hub import snapshot_download
@@ -27,6 +28,7 @@ from trainer_qa import QuestionAnsweringTrainer
 from transformers import (
     AutoConfig,
     AutoModelForQuestionAnswering,
+    AutoModelForCausalLM,
     AutoTokenizer,
     DataCollatorWithPadding,
     EvalPrediction,
@@ -37,6 +39,76 @@ from transformers import (
 from utils_qa import check_no_error, postprocess_qa_predictions
 
 logger = logging.getLogger(__name__)
+
+
+# 모델별 설정 딕셔너리 (확장 가능한 구조)
+MODEL_CONFIGS = {
+    "qwen": {
+        "is_generation": True,
+        "skip_config": True,  # Qwen3는 transformers>=4.51.0 필요하므로 config 로딩 건너뛰기
+        "load_model_kwargs": {
+            "torch_dtype": "auto",
+            "device_map": "auto",
+        },
+        "load_tokenizer_kwargs": {},
+        "generation_kwargs": {
+            "max_new_tokens": 256,  # 메모리 최적화: QA 태스크에 충분한 길이
+            "do_sample": False,  # Greedy decoding (메모리 효율적)
+        },
+        "generation_method": "qwen",  # Qwen 공식 예제 방식
+    },
+    "hyperclovax": {
+        "is_generation": True,
+        "skip_config": False,
+        "load_model_kwargs": {
+            "device_map": "auto",
+            "trust_remote_code": True,
+        },
+        "load_tokenizer_kwargs": {
+            "use_fast": False,  # 호환성 문제 해결
+            "trust_remote_code": True,
+        },
+        "generation_kwargs": {
+            "max_length": 1024,
+            "stop_strings": ["<|endofturn|>", "<|stop|>"],
+        },
+        "generation_method": "hyperclovax",
+    },
+    "default": {
+        "is_generation": False,
+        "skip_config": False,
+        "load_model_kwargs": {},
+        "load_tokenizer_kwargs": {
+            "use_fast": True,
+        },
+        "generation_kwargs": {},
+        "generation_method": "extractive",
+    },
+}
+
+
+def get_model_config(model_name: str) -> dict:
+    """
+    모델 이름을 기반으로 설정을 가져옵니다.
+    
+    Args:
+        model_name: 모델 이름 또는 경로 (예: "Qwen/Qwen3-4B-Instruct-2507")
+    
+    Returns:
+        모델 설정 딕셔너리
+    """
+    model_name_lower = model_name.lower()
+    
+    # Qwen 모델 체크
+    if "qwen" in model_name_lower:
+        return MODEL_CONFIGS["qwen"]
+    
+    # HyperCLOVAX 모델 체크
+    if "hyperclovax" in model_name_lower or "clovax" in model_name_lower:
+        return MODEL_CONFIGS["hyperclovax"]
+    
+    # 기본값 (Extractive QA 모델)
+    return MODEL_CONFIGS["default"]
 
 
 def main():
@@ -114,28 +186,72 @@ def main():
     datasets = load_from_disk(data_args.dataset_name)
     print(datasets)
 
-    # AutoConfig를 이용하여 pretrained model 과 tokenizer를 불러옵니다.
-    # argument로 원하는 모델 이름을 설정하면 옵션을 바꿀 수 있습니다.
-    config = AutoConfig.from_pretrained(
-        (
-            model_args.config_name
-            if model_args.config_name
-            else model_args.model_name_or_path
-        ),
+    # 모델 설정 가져오기
+    model_config = get_model_config(model_args.model_name_or_path)
+    is_generation_model = model_config["is_generation"]
+    
+    logger.info(f"Model: {model_args.model_name_or_path}")
+    logger.info(f"Model type: {'Generation' if is_generation_model else 'Extractive QA'}")
+    logger.info(f"Generation method: {model_config['generation_method']}")
+    
+    # Config 로딩 (일부 모델은 건너뛰기)
+    config = None
+    if not model_config["skip_config"]:
+        config = AutoConfig.from_pretrained(
+            (
+                model_args.config_name
+                if model_args.config_name
+                else model_args.model_name_or_path
+            ),
+        )
+    
+    # Tokenizer 경로 설정
+    tokenizer_path = (
+        model_args.tokenizer_name
+        if model_args.tokenizer_name
+        else model_args.model_name_or_path
     )
-    tokenizer = AutoTokenizer.from_pretrained(
-        (
-            model_args.tokenizer_name
-            if model_args.tokenizer_name
-            else model_args.model_name_or_path
-        ),
-        use_fast=True,
-    )
-    model = AutoModelForQuestionAnswering.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-    )
+    
+    # 모델 및 Tokenizer 로딩
+    if is_generation_model:
+        # Generation 모델 로드
+        logger.info(f"Loading generation model: {model_args.model_name_or_path}")
+        try:
+            # Tokenizer 로드
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_path,
+                **model_config["load_tokenizer_kwargs"]
+            )
+            
+            # Model 로드
+            model = AutoModelForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                **model_config["load_model_kwargs"]
+            )
+            
+            logger.info(f"Successfully loaded generation model and tokenizer")
+        except Exception as e:
+            logger.error(f"Failed to load model/tokenizer: {e}")
+            raise RuntimeError(
+                f"Failed to load generation model. Error: {e}\n"
+                "Please try:\n"
+                "1. Check transformers version (Qwen3 requires transformers>=4.51.0)\n"
+                "2. Clear Hugging Face cache: rm -rf ~/.cache/huggingface\n"
+                "3. Check your internet connection\n"
+                "4. Or use a different model"
+            )
+    else:
+        # 일반 Extractive QA 모델
+        logger.info(f"Loading extractive QA model: {model_args.model_name_or_path}")
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_path,
+            **model_config["load_tokenizer_kwargs"]
+        )
+        model = AutoModelForQuestionAnswering.from_pretrained(
+            model_args.model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=config,
+        )
 
     # True일 경우 : run passage retrieval
     if data_args.eval_retrieval:
@@ -148,7 +264,18 @@ def main():
 
     # eval or predict mrc model
     if training_args.do_eval or training_args.do_predict:
-        run_mrc(data_args, training_args, model_args, datasets, tokenizer, model)
+        if is_generation_model:
+            run_mrc_generation(
+                data_args, 
+                training_args, 
+                model_args, 
+                datasets, 
+                tokenizer, 
+                model,
+                model_config
+            )
+        else:
+            run_mrc(data_args, training_args, model_args, datasets, tokenizer, model)
 
 
 def run_sparse_retrieval(
@@ -357,6 +484,235 @@ def run_mrc(
 
         trainer.log_metrics("test", metrics)
         trainer.save_metrics("test", metrics)
+
+
+def run_mrc_generation(
+    data_args: DataTrainingArguments,
+    training_args: TrainingArguments,
+    model_args: ModelArguments,
+    datasets: DatasetDict,
+    tokenizer,
+    model,
+    model_config: dict,
+) -> NoReturn:
+    """
+    Generation 기반 QA를 수행하는 함수
+    Generation 모델을 사용할 때 호출됩니다.
+    
+    Args:
+        model_config: 모델별 설정 딕셔너리 (generation_method, generation_kwargs 포함)
+    """
+    import json
+    from tqdm import tqdm
+    
+    logger.info("Using Generation-based QA")
+    
+    # eval 혹은 prediction에서만 사용함
+    column_names = datasets["validation"].column_names
+    question_column_name = "question" if "question" in column_names else column_names[0]
+    context_column_name = "context" if "context" in column_names else column_names[1]
+    answer_column_name = "answers" if "answers" in column_names else None
+    
+    # Retrieval된 context 확인
+    if len(datasets["validation"]) > 0:
+        sample_context = datasets["validation"][0][context_column_name]
+        logger.info(f"Sample retrieved context length: {len(sample_context)} characters")
+        logger.info(f"Using retrieved contexts from sparse retrieval (top-k={data_args.top_k_retrieval})")
+    
+    model.eval()
+    predictions = {}
+    
+    logger.info(f"Processing {len(datasets['validation'])} examples with retrieved contexts...")
+    
+    with torch.no_grad():
+        for example in tqdm(datasets["validation"]):
+            question = example[question_column_name]
+            context = example[context_column_name]
+            example_id = example["id"]
+            
+            # 모델 설정에 따라 다른 방식으로 처리
+            generation_method = model_config["generation_method"]
+            generation_kwargs = model_config["generation_kwargs"].copy()
+            
+            try:
+                # QA 태스크에 맞게 chat template 구성
+                messages = [
+                    {"role": "user", "content": f"다음 지문을 읽고 질문에 답하세요.\n\n지문: {context}\n\n질문: {question}"},
+                ]
+                
+                if generation_method == "qwen":
+                    # Qwen 공식 문서 예제 방식: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
+                    text = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    # Context 길이 제한으로 메모리 사용량 감소
+                    model_inputs = tokenizer(
+                        [text], 
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=2048,  # 메모리 최적화: 4096 -> 2048
+                    ).to(model.device)
+                    
+                    # Generation
+                    generated_ids = model.generate(
+                        **model_inputs,
+                        **generation_kwargs
+                    )
+                    
+                    # 입력 부분 제거하고 답변만 추출 (Qwen 공식 예제 방식)
+                    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
+                    answer = tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+                    
+                elif generation_method == "hyperclovax":
+                    # HyperCLOVAX 방식
+                    inputs = tokenizer.apply_chat_template(
+                        messages,
+                        add_generation_prompt=True,
+                        return_dict=True,
+                        return_tensors="pt",
+                    )
+                    
+                    if torch.cuda.is_available():
+                        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+                    
+                    # stop_strings 추출 (generation_kwargs에서)
+                    stop_strings = generation_kwargs.pop("stop_strings", [])
+                    tokenizer_param = generation_kwargs.pop("tokenizer", None)
+                    
+                    gen_kwargs = generation_kwargs.copy()
+                    if tokenizer_param:
+                        gen_kwargs["tokenizer"] = tokenizer
+                    
+                    output_ids = model.generate(
+                        **inputs,
+                        **gen_kwargs
+                    )
+                    
+                    generated_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+                    input_text = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+                    if input_text in generated_text:
+                        answer = generated_text.replace(input_text, "").strip()
+                    else:
+                        input_ids_length = inputs["input_ids"].shape[1]
+                        answer = tokenizer.decode(output_ids[0][input_ids_length:], skip_special_tokens=True).strip()
+                    
+                    # stop_strings 제거
+                    for stop_str in stop_strings:
+                        answer = answer.replace(stop_str, "").strip()
+                else:
+                    # 기본 방식 (fallback)
+                    prompt = f"다음 지문을 읽고 질문에 답하세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
+                    inputs = tokenizer(
+                        prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=2048,  # 메모리 최적화: 4096 -> 2048
+                        padding=False,
+                    )
+                    if torch.cuda.is_available():
+                        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+                    
+                    output_ids = model.generate(
+                        **inputs,
+                        **generation_kwargs
+                    )
+                    generated_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+                    if "답변:" in generated_text:
+                        answer = generated_text.split("답변:")[-1].strip()
+                    else:
+                        prompt_length = len(tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True))
+                        answer = generated_text[prompt_length:].strip()
+                
+                # 빈 답변 처리
+                if not answer or len(answer) == 0:
+                    answer = ""
+                
+                # 메모리 정리 (fragmentation 방지)
+                if torch.cuda.is_available():
+                    # 변수가 존재하는 경우에만 삭제
+                    if 'model_inputs' in locals():
+                        del model_inputs
+                    if 'inputs' in locals():
+                        del inputs
+                    if 'generated_ids' in locals():
+                        del generated_ids
+                    if 'output_ids' in locals():
+                        del output_ids
+                    torch.cuda.empty_cache()
+                    
+            except Exception as e:
+                logger.warning(f"Error generating answer for example {example_id}: {e}")
+                # Fallback: 간단한 프롬프트 방식
+                try:
+                    prompt = f"다음 지문을 읽고 질문에 답하세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
+                    inputs = tokenizer(
+                        prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=2048,  # 메모리 최적화: 4096 -> 2048
+                        padding=False,
+                    )
+                    if torch.cuda.is_available():
+                        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+                    
+                    output_ids = model.generate(
+                        **inputs,
+                        max_new_tokens=128,
+                        do_sample=False,
+                        pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id else tokenizer.eos_token_id,
+                        eos_token_id=tokenizer.eos_token_id,
+                    )
+                    generated_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+                    if "답변:" in generated_text:
+                        answer = generated_text.split("답변:")[-1].strip()
+                    else:
+                        prompt_length = len(tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True))
+                        answer = generated_text[prompt_length:].strip()
+                    if not answer:
+                        answer = ""
+                except Exception as e2:
+                    logger.warning(f"Fallback generation also failed for example {example_id}: {e2}")
+                    answer = ""
+            
+            # 메모리 정리 (각 예제 처리 후)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            predictions[example_id] = answer
+    
+    # predictions.json 저장
+    output_file = os.path.join(training_args.output_dir, "predictions.json")
+    os.makedirs(training_args.output_dir, exist_ok=True)
+    
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(predictions, f, ensure_ascii=False, indent=4)
+    
+    logger.info(f"Predictions saved to {output_file}")
+    
+    # 평가 (do_eval인 경우)
+    if training_args.do_eval and answer_column_name:
+        metric = evaluate.load("squad")
+        formatted_predictions = [
+            {"id": k, "prediction_text": v} for k, v in predictions.items()
+        ]
+        references = [
+            {"id": ex["id"], "answers": ex[answer_column_name]}
+            for ex in datasets["validation"]
+        ]
+        
+        metrics = metric.compute(predictions=formatted_predictions, references=references)
+        logger.info(f"Evaluation metrics: {metrics}")
+        
+        # 메트릭 저장
+        metrics_file = os.path.join(training_args.output_dir, "eval_results.json")
+        with open(metrics_file, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=4)
+        
+        logger.info(f"Metrics saved to {metrics_file}")
+    else:
+        logger.info("No evaluation performed (do_eval=False or no answers in dataset)")
 
 
 if __name__ == "__main__":
