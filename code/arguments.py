@@ -114,3 +114,7 @@ class DataTrainingArguments:
     use_faiss: bool = field(
         default=False, metadata={"help": "Whether to build with faiss"}
     )
+    use_vllm: bool = field(
+        default=False, 
+        metadata={"help": "Whether to use vLLM for faster generation inference (requires vllm package)"}
+    )

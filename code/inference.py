@@ -40,6 +40,14 @@ from utils_qa import check_no_error, postprocess_qa_predictions
 
 logger = logging.getLogger(__name__)
 
+# vLLM import (optional)
+try:
+    from vllm import LLM, SamplingParams
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
+    logger.warning("vLLM is not installed. Install with 'pip install vllm' to use faster inference.")
+
 
 # 모델별 설정 딕셔너리 (확장 가능한 구조)
 MODEL_CONFIGS = {
@@ -52,27 +60,10 @@ MODEL_CONFIGS = {
         },
         "load_tokenizer_kwargs": {},
         "generation_kwargs": {
-            "max_new_tokens": 256,  # 메모리 최적화: QA 태스크에 충분한 길이
+            "max_new_tokens": 100,  # QA 태스크에 적합한 짧은 답변 길이로 제한
             "do_sample": False,  # Greedy decoding (메모리 효율적)
         },
         "generation_method": "qwen",  # Qwen 공식 예제 방식
-    },
-    "hyperclovax": {
-        "is_generation": True,
-        "skip_config": False,
-        "load_model_kwargs": {
-            "device_map": "auto",
-            "trust_remote_code": True,
-        },
-        "load_tokenizer_kwargs": {
-            "use_fast": False,  # 호환성 문제 해결
-            "trust_remote_code": True,
-        },
-        "generation_kwargs": {
-            "max_length": 1024,
-            "stop_strings": ["<|endofturn|>", "<|stop|>"],
-        },
-        "generation_method": "hyperclovax",
     },
     "default": {
         "is_generation": False,
@@ -102,10 +93,6 @@ def get_model_config(model_name: str) -> dict:
     # Qwen 모델 체크
     if "qwen" in model_name_lower:
         return MODEL_CONFIGS["qwen"]
-    
-    # HyperCLOVAX 모델 체크
-    if "hyperclovax" in model_name_lower or "clovax" in model_name_lower:
-        return MODEL_CONFIGS["hyperclovax"]
     
     # 기본값 (Extractive QA 모델)
     return MODEL_CONFIGS["default"]
@@ -213,33 +200,65 @@ def main():
     )
     
     # 모델 및 Tokenizer 로딩
+    vllm_model = None  # vLLM 모델 인스턴스
     if is_generation_model:
+        # vLLM 사용 여부 확인
+        use_vllm = data_args.use_vllm and VLLM_AVAILABLE
+        if data_args.use_vllm and not VLLM_AVAILABLE:
+            logger.warning("--use_vllm is set but vLLM is not installed. Falling back to transformers.")
+            logger.warning("Install vLLM with: pip install vllm")
+            use_vllm = False
+        
         # Generation 모델 로드
         logger.info(f"Loading generation model: {model_args.model_name_or_path}")
-        try:
-            # Tokenizer 로드
-            tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_path,
-                **model_config["load_tokenizer_kwargs"]
-            )
-            
-            # Model 로드
-            model = AutoModelForCausalLM.from_pretrained(
-                model_args.model_name_or_path,
-                **model_config["load_model_kwargs"]
-            )
-            
-            logger.info(f"Successfully loaded generation model and tokenizer")
-        except Exception as e:
-            logger.error(f"Failed to load model/tokenizer: {e}")
-            raise RuntimeError(
-                f"Failed to load generation model. Error: {e}\n"
-                "Please try:\n"
-                "1. Check transformers version (Qwen3 requires transformers>=4.51.0)\n"
-                "2. Clear Hugging Face cache: rm -rf ~/.cache/huggingface\n"
-                "3. Check your internet connection\n"
-                "4. Or use a different model"
-            )
+        if use_vllm:
+            logger.info("Using vLLM for faster inference")
+            try:
+                # vLLM으로 모델 로드
+                vllm_model = LLM(
+                    model=model_args.model_name_or_path,
+                    max_model_len=4096,  # context 길이 제한 (top-10 retrieval 대응)
+                    gpu_memory_utilization=0.9,  # GPU 메모리 사용률
+                    trust_remote_code=True,
+                )
+                # Tokenizer는 vLLM이 자동으로 로드하지만, 별도로도 필요할 수 있음
+                tokenizer = AutoTokenizer.from_pretrained(
+                    tokenizer_path,
+                    **model_config["load_tokenizer_kwargs"]
+                )
+                model = None  # vLLM 사용 시 transformers 모델은 사용하지 않음
+                logger.info("Successfully loaded model with vLLM")
+            except Exception as e:
+                logger.error(f"Failed to load model with vLLM: {e}")
+                logger.warning("Falling back to transformers")
+                use_vllm = False
+        
+        if not use_vllm:
+            # Transformers로 모델 로드
+            try:
+                # Tokenizer 로드
+                tokenizer = AutoTokenizer.from_pretrained(
+                    tokenizer_path,
+                    **model_config["load_tokenizer_kwargs"]
+                )
+                
+                # Model 로드
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    **model_config["load_model_kwargs"]
+                )
+                
+                logger.info(f"Successfully loaded generation model and tokenizer (transformers)")
+            except Exception as e:
+                logger.error(f"Failed to load model/tokenizer: {e}")
+                raise RuntimeError(
+                    f"Failed to load generation model. Error: {e}\n"
+                    "Please try:\n"
+                    "1. Check transformers version (Qwen3 requires transformers>=4.51.0)\n"
+                    "2. Clear Hugging Face cache: rm -rf ~/.cache/huggingface\n"
+                    "3. Check your internet connection\n"
+                    "4. Or use a different model"
+                )
     else:
         # 일반 Extractive QA 모델
         logger.info(f"Loading extractive QA model: {model_args.model_name_or_path}")
@@ -272,7 +291,8 @@ def main():
                 datasets, 
                 tokenizer, 
                 model,
-                model_config
+                model_config,
+                vllm_model  # vLLM 모델 전달
             )
         else:
             run_mrc(data_args, training_args, model_args, datasets, tokenizer, model)
@@ -494,6 +514,7 @@ def run_mrc_generation(
     tokenizer,
     model,
     model_config: dict,
+    vllm_model=None,  # vLLM 모델 인스턴스
 ) -> NoReturn:
     """
     Generation 기반 QA를 수행하는 함수
@@ -507,6 +528,18 @@ def run_mrc_generation(
     
     logger.info("Using Generation-based QA")
     
+    # 프롬프트 템플릿 함수
+    def create_qa_messages(context: str, question: str) -> list:
+        """QA 메시지 생성 (chat template용)"""
+        return [
+            {"role": "user", 
+             "content": f"""다음 지문에는 질문에 대한 답이 포함되어 있습니다. 
+             지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.
+             질문: {question}
+             지문: {context}
+             답변:"""}
+        ]
+    
     # eval 혹은 prediction에서만 사용함
     column_names = datasets["validation"].column_names
     question_column_name = "question" if "question" in column_names else column_names[0]
@@ -519,168 +552,163 @@ def run_mrc_generation(
         logger.info(f"Sample retrieved context length: {len(sample_context)} characters")
         logger.info(f"Using retrieved contexts from sparse retrieval (top-k={data_args.top_k_retrieval})")
     
-    model.eval()
+    # vLLM 사용 여부 확인
+    use_vllm = vllm_model is not None
+    if use_vllm:
+        logger.info("Using vLLM for generation (faster inference)")
+        # vLLM SamplingParams 설정
+        generation_kwargs = model_config["generation_kwargs"].copy()
+        sampling_params = SamplingParams(
+            max_tokens=generation_kwargs.get("max_new_tokens", 100),  # 짧은 답변을 위해 100으로 제한
+            temperature=0.0 if not generation_kwargs.get("do_sample", False) else 0.7,
+            stop=[],  # stop strings는 나중에 처리
+        )
+    else:
+        if model is not None:
+            model.eval()
+        logger.info("Using transformers for generation")
+    
     predictions = {}
     
-    logger.info(f"Processing {len(datasets['validation'])} examples with retrieved contexts...")
+    # 토큰 길이 통계 수집
+    token_lengths = []
+    truncated_count = 0
+    max_input_length = 4096  # Transformers 경로에서 사용하는 max_length (top-10 retrieval 대응)
     
-    with torch.no_grad():
+    logger.info(f"Processing {len(datasets['validation'])} examples with retrieved contexts...")
+    logger.info(f"Max input token length: {max_input_length} (Transformers) / {vllm_model.max_model_len if use_vllm and vllm_model else 'N/A'} (vLLM)")
+    
+    # vLLM 사용 시 torch.no_grad() 불필요, transformers 사용 시 필요
+    if use_vllm:
+        # vLLM은 자체적으로 메모리 관리
         for example in tqdm(datasets["validation"]):
             question = example[question_column_name]
             context = example[context_column_name]
             example_id = example["id"]
             
-            # 모델 설정에 따라 다른 방식으로 처리
-            generation_method = model_config["generation_method"]
             generation_kwargs = model_config["generation_kwargs"].copy()
             
             try:
-                # QA 태스크에 맞게 chat template 구성
-                messages = [
-                    {"role": "user", "content": f"다음 지문을 읽고 질문에 답하세요.\n\n지문: {context}\n\n질문: {question}"},
-                ]
+                # QA 태스크에 맞게 chat template 구성 (지문에서 직접 추출)
+                messages = create_qa_messages(context, question)
                 
-                if generation_method == "qwen":
-                    # Qwen 공식 문서 예제 방식: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
+                # Chat template 적용 시도 (모든 모델에 대해 통합)
+                try:
                     text = tokenizer.apply_chat_template(
                         messages,
                         tokenize=False,
                         add_generation_prompt=True,
                     )
+                except (AttributeError, TypeError):
+                    # Chat template이 없는 경우 fallback: 직접 문자열 생성
+                    text = f"다음 지문에는 질문에 대한 답이 포함되어 있습니다. 지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
+                
+                # 토큰 길이 확인 (vLLM)
+                encoded = tokenizer.encode(text, add_special_tokens=False)
+                token_length = len(encoded)
+                token_lengths.append(token_length)
+                max_vllm_length = vllm_model.max_model_len if hasattr(vllm_model, 'max_model_len') else 2048
+                
+                if token_length > max_vllm_length:
+                    truncated_count += 1
+                    if truncated_count <= 5:  # 처음 5개만 상세 로깅
+                        logger.warning(
+                            f"Example {example_id}: Input token length ({token_length}) exceeds vLLM max_model_len ({max_vllm_length}). "
+                            f"Context will be truncated. Context char length: {len(context)}"
+                        )
+                
+                # vLLM 사용
+                outputs = vllm_model.generate([text], sampling_params)
+                generated_text = outputs[0].outputs[0].text
+                answer = generated_text.strip()
+                
+                # 빈 답변 처리
+                if not answer or len(answer) == 0:
+                    answer = ""
+                    
+            except Exception as e:
+                logger.warning(f"Error generating answer for example {example_id}: {e}")
+                # 실패 시 빈 답변 반환
+                answer = ""
+            
+                # 메모리 정리 (각 예제 처리 후)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                predictions[example_id] = answer
+    else:
+        # Transformers 사용 시 torch.no_grad() 필요
+        with torch.no_grad():
+            for example in tqdm(datasets["validation"]):
+                question = example[question_column_name]
+                context = example[context_column_name]
+                example_id = example["id"]
+                
+                generation_kwargs = model_config["generation_kwargs"].copy()
+                
+                try:
+                    # QA 태스크에 맞게 chat template 구성 (지문에서 직접 추출)
+                    messages = create_qa_messages(context, question)
+                    
+                    # Chat template 적용 시도 (모든 모델에 대해 통합)
+                    try:
+                        text = tokenizer.apply_chat_template(
+                            messages,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                        )
+                    except (AttributeError, TypeError):
+                        # Chat template이 없는 경우 fallback: 직접 문자열 생성
+                        text = f"다음 지문에는 질문에 대한 답이 포함되어 있습니다. 지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
+                    
+                    # 토큰 길이 확인 (Transformers)
+                    encoded_before = tokenizer.encode(text, add_special_tokens=False)
+                    token_length_before = len(encoded_before)
+                    token_lengths.append(token_length_before)
+                    
                     # Context 길이 제한으로 메모리 사용량 감소
                     model_inputs = tokenizer(
                         [text], 
                         return_tensors="pt",
                         truncation=True,
-                        max_length=2048,  # 메모리 최적화: 4096 -> 2048
+                        max_length=max_input_length,
                     ).to(model.device)
+                    
+                    # 잘렸는지 확인
+                    token_length_after = model_inputs.input_ids.shape[1]
+                    if token_length_before > max_input_length:
+                        truncated_count += 1
+                        if truncated_count <= 5:  # 처음 5개만 상세 로깅
+                            logger.warning(
+                                f"Example {example_id}: Input token length ({token_length_before}) exceeds max_length ({max_input_length}). "
+                                f"Truncated to {token_length_after} tokens. Context char length: {len(context)}"
+                            )
                     
                     # Generation
                     generated_ids = model.generate(
                         **model_inputs,
-                        **generation_kwargs
+                        **generation_kwargs,
+                        eos_token_id=tokenizer.eos_token_id,  # EOS 토큰으로 조기 종료
+                        pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id else tokenizer.eos_token_id,
                     )
                     
-                    # 입력 부분 제거하고 답변만 추출 (Qwen 공식 예제 방식)
+                    # 입력 부분 제거하고 답변만 추출
                     output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
                     answer = tokenizer.decode(output_ids, skip_special_tokens=True).strip()
                     
-                elif generation_method == "hyperclovax":
-                    # HyperCLOVAX 방식
-                    inputs = tokenizer.apply_chat_template(
-                        messages,
-                        add_generation_prompt=True,
-                        return_dict=True,
-                        return_tensors="pt",
-                    )
-                    
-                    if torch.cuda.is_available():
-                        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
-                    
-                    # stop_strings 추출 (generation_kwargs에서)
-                    stop_strings = generation_kwargs.pop("stop_strings", [])
-                    tokenizer_param = generation_kwargs.pop("tokenizer", None)
-                    
-                    gen_kwargs = generation_kwargs.copy()
-                    if tokenizer_param:
-                        gen_kwargs["tokenizer"] = tokenizer
-                    
-                    output_ids = model.generate(
-                        **inputs,
-                        **gen_kwargs
-                    )
-                    
-                    generated_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
-                    input_text = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-                    if input_text in generated_text:
-                        answer = generated_text.replace(input_text, "").strip()
-                    else:
-                        input_ids_length = inputs["input_ids"].shape[1]
-                        answer = tokenizer.decode(output_ids[0][input_ids_length:], skip_special_tokens=True).strip()
-                    
-                    # stop_strings 제거
-                    for stop_str in stop_strings:
-                        answer = answer.replace(stop_str, "").strip()
-                else:
-                    # 기본 방식 (fallback)
-                    prompt = f"다음 지문을 읽고 질문에 답하세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
-                    inputs = tokenizer(
-                        prompt,
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=2048,  # 메모리 최적화: 4096 -> 2048
-                        padding=False,
-                    )
-                    if torch.cuda.is_available():
-                        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
-                    
-                    output_ids = model.generate(
-                        **inputs,
-                        **generation_kwargs
-                    )
-                    generated_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
-                    if "답변:" in generated_text:
-                        answer = generated_text.split("답변:")[-1].strip()
-                    else:
-                        prompt_length = len(tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True))
-                        answer = generated_text[prompt_length:].strip()
-                
-                # 빈 답변 처리
-                if not answer or len(answer) == 0:
-                    answer = ""
-                
-                # 메모리 정리 (fragmentation 방지)
-                if torch.cuda.is_available():
-                    # 변수가 존재하는 경우에만 삭제
-                    if 'model_inputs' in locals():
-                        del model_inputs
-                    if 'inputs' in locals():
-                        del inputs
-                    if 'generated_ids' in locals():
-                        del generated_ids
-                    if 'output_ids' in locals():
-                        del output_ids
-                    torch.cuda.empty_cache()
-                    
-            except Exception as e:
-                logger.warning(f"Error generating answer for example {example_id}: {e}")
-                # Fallback: 간단한 프롬프트 방식
-                try:
-                    prompt = f"다음 지문을 읽고 질문에 답하세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
-                    inputs = tokenizer(
-                        prompt,
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=2048,  # 메모리 최적화: 4096 -> 2048
-                        padding=False,
-                    )
-                    if torch.cuda.is_available():
-                        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
-                    
-                    output_ids = model.generate(
-                        **inputs,
-                        max_new_tokens=128,
-                        do_sample=False,
-                        pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id else tokenizer.eos_token_id,
-                        eos_token_id=tokenizer.eos_token_id,
-                    )
-                    generated_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
-                    if "답변:" in generated_text:
-                        answer = generated_text.split("답변:")[-1].strip()
-                    else:
-                        prompt_length = len(tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True))
-                        answer = generated_text[prompt_length:].strip()
-                    if not answer:
+                    if not answer or len(answer) == 0:
                         answer = ""
-                except Exception as e2:
-                    logger.warning(f"Fallback generation also failed for example {example_id}: {e2}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error generating answer for example {example_id}: {e}")
+                    # 실패 시 빈 답변 반환
                     answer = ""
-            
-            # 메모리 정리 (각 예제 처리 후)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            predictions[example_id] = answer
+                
+                # 메모리 정리 (각 예제 처리 후)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                predictions[example_id] = answer
     
     # predictions.json 저장
     output_file = os.path.join(training_args.output_dir, "predictions.json")
@@ -690,6 +718,36 @@ def run_mrc_generation(
         json.dump(predictions, f, ensure_ascii=False, indent=4)
     
     logger.info(f"Predictions saved to {output_file}")
+    
+    # 토큰 길이 통계 출력
+    if token_lengths:
+        avg_length = np.mean(token_lengths)
+        max_length = np.max(token_lengths)
+        min_length = np.min(token_lengths)
+        median_length = np.median(token_lengths)
+        p95_length = np.percentile(token_lengths, 95)
+        p99_length = np.percentile(token_lengths, 99)
+        
+        logger.info("=" * 60)
+        logger.info("Input Token Length Statistics:")
+        logger.info(f"  Total examples: {len(token_lengths)}")
+        logger.info(f"  Truncated examples: {truncated_count} ({truncated_count/len(token_lengths)*100:.1f}%)")
+        logger.info(f"  Average: {avg_length:.1f} tokens")
+        logger.info(f"  Median: {median_length:.1f} tokens")
+        logger.info(f"  Min: {min_length} tokens")
+        logger.info(f"  Max: {max_length} tokens")
+        logger.info(f"  95th percentile: {p95_length:.1f} tokens")
+        logger.info(f"  99th percentile: {p99_length:.1f} tokens")
+        max_vllm_len = vllm_model.max_model_len if use_vllm and vllm_model and hasattr(vllm_model, 'max_model_len') else None
+        max_allowed_str = f"{max_input_length} tokens (Transformers)" if not use_vllm else (f"{max_vllm_len} tokens (vLLM)" if max_vllm_len else "N/A")
+        logger.info(f"  Max allowed: {max_allowed_str}")
+        
+        if truncated_count > 0:
+            logger.warning(
+                f"⚠️  {truncated_count} examples ({truncated_count/len(token_lengths)*100:.1f}%) were truncated. "
+                f"Consider reducing top_k_retrieval or increasing max_length."
+            )
+        logger.info("=" * 60)
     
     # 평가 (do_eval인 경우)
     if training_args.do_eval and answer_column_name:
