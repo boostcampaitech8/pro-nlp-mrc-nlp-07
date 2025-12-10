@@ -1,185 +1,153 @@
-# 프로젝트 시작 가이드
+# LLM Ensemble System
 
-## Git Clone 및 초기 설정
+LLM을 사용한 앙상블 시스템입니다. 여러 CSV 파일의 답변을 집계하고, LLM을 사용하여 가장 적절한 답변을 선택합니다.
 
-### 1. 프로젝트 클론
+## 📁 폴더 구조
+
+```
+llm-ensemble/
+├── data/
+│   └── test_dataset/     # 질문과 ID가 포함된 테스트 데이터셋
+├── csv/                  # 답변 CSV 파일들을 여기에 넣으세요
+│   ├── answer1.csv
+│   ├── answer2.csv
+│   └── answer3.csv
+├── config.py            # 설정 파일
+├── ensemble.py          # 메인 앙상블 스크립트
+└── README.md
+```
+
+## 📋 입력 데이터 형식
+
+### 1. 테스트 데이터셋 (`./data/test_dataset`)
+- HuggingFace datasets 형식
+- 필드: `id`, `question`
+
+### 2. 답변 CSV 파일들 (`./csv/*.csv`)
+- 탭으로 구분된 CSV 파일
+- 헤더 없음
+- 형식: `id\tanswer`
+- 예시:
+  ```
+  mrc-1-000653	사만
+  mrc-1-001113	냉전 종식
+  mrc-0-002191	대통령인 빌헬름 미클라스
+  ```
+
+## 🚀 사용 방법
+
+### 1. CSV 파일 준비
+답변 CSV 파일들을 `./csv` 폴더에 넣으세요:
 ```bash
-cd /data/ephemeral/home/{자신의 캠퍼 아이디}/
-git clone https://{git username}:{PAT (github token (classic 추천))}@github.com/boostcampaitech8/pro-nlp-mrc-nlp-07.git
-cd pro-nlp-mrc-nlp-07
+cp /path/to/answer1.csv ./csv/
+cp /path/to/answer2.csv ./csv/
+cp /path/to/answer3.csv ./csv/
 ```
 
-### 2. Git 사용자 정보 설정
-각 프로젝트 폴더마다 독립적으로 사용자 정보를 설정하기 위해 `--local` 옵션을 사용합니다.
-
+### 2. 기본 실행
 ```bash
-git config --local user.name "사용자이름"
-git config --local user.email "이메일@example.com"
+python ensemble.py
 ```
 
-> **참고**: `--local` 옵션을 사용하면 해당 저장소에만 설정이 적용되므로, 다른 폴더의 프로젝트에서는 다른 깃허브 계정을 사용할 수 있습니다.
-
-설정 확인:
+### 3. 옵션을 사용한 실행
 ```bash
-git config --local --list
+# 다른 모델 사용
+python ensemble.py --model beomi/Llama-3-Open-Ko-8B-Instruct-preview
+
+# 출력 파일 지정
+python ensemble.py --output ./my_output.csv
+
+# Temperature 조정 (더 다양한 답변)
+python ensemble.py --temperature 0.3
+
+# CSV 폴더 지정
+python ensemble.py --csv_folder ./my_csv_folder
 ```
 
-## 브랜치 전략
+## ⚙️ 설정
 
-### 기본 브랜치
-- default 브랜치: `feedback`
-- **작업 브랜치: `main` 브랜치에서 세부 브랜치를 나눠서 작업합니다.**
+`config.py`에서 다음 설정을 변경할 수 있습니다:
 
-### 브랜치 생성 및 작업 흐름
+```python
+# 모델 설정
+model_name_or_path = "beomi/Llama-3-Open-Ko-8B-Instruct-preview"
 
-1. **main 브랜치로 전환**
-```bash
-git checkout main
-git pull origin main
+# 생성 파라미터
+max_new_tokens = 50        # 생성할 최대 토큰 수
+temperature = 0.1          # 낮을수록 더 결정적
+do_sample = False          # False = greedy decoding
+
+# 경로
+test_dataset_path = "./data/test_dataset"
+csv_folder = "./csv"
+output_file = "./ensemble_output.csv"
 ```
 
-2. **실험 브랜치 생성**
-브랜치명 형식: `{팀원들의 이니셜}-{issue num}`
+## 📊 출력
 
-```bash
-git checkout -b ke-12
-git checkout -b xyz-15
-git checkout -b abc-20
+### 1. 결과 CSV 파일 (`ensemble_output.csv`)
+- 탭으로 구분
+- 헤더 없음
+- 형식: `id\tanswer`
+
+### 2. 디버그 파일 (`ensemble_output_debug.json`)
+- 각 질문의 선택지 목록
+- 검증 결과
+- 통계 정보
+
+## 🔍 작동 방식
+
+1. **데이터 로드**: 테스트 데이터셋과 모든 CSV 파일 로드
+2. **답변 집계**: 각 질문 ID에 대해 모든 CSV에서 답변 수집
+3. **중복 제거**: 동일한 답변은 하나만 보기에 포함
+4. **프롬프트 생성**: 다음 형식으로 프롬프트 생성
+   ```
+   다음 중 아래 질문에 대한 답으로 가장 적절한 것을 보기 중에서 고르시오. 
+   답변을 작성할 때는 부가적인 내용을 덧붙이지 말고, 반드시 보기 중에 선택한 것 만을 그대로 작성하시오.
+
+   질문: (질문 내용)
+
+   보기:
+   - (답변1)
+   - (답변2)
+   - (답변3)
+   ```
+5. **LLM 호출**: 각 프롬프트에 대해 LLM이 답변 생성
+6. **답변 검증**: 생성된 답변이 보기 중 하나와 일치하는지 확인
+7. **결과 저장**: 최종 답변을 CSV 파일로 저장
+
+## 📈 검증 통계
+
+실행 후 다음과 같은 통계가 출력됩니다:
+```
+Validation Statistics:
+  Total questions: 600
+  Valid answers: 580 (96.7%)
+  Invalid answers: 15 (2.5%)
+  No choices found: 5
 ```
 
-3. **실험 폴더 생성**
-브랜치를 생성한 후, 각 실험별로 폴더를 만듭니다.
-폴더명 형식: `{팀원들의 이니셜}-{issue num}` (브랜치명과 동일)
+- **Valid answers**: LLM 답변이 보기 중 하나와 일치
+- **Invalid answers**: LLM 답변이 보기와 일치하지 않음 (그래도 답변은 저장됨)
+- **No choices found**: 해당 질문 ID에 대한 답변이 CSV에 없음
 
-```bash
-mkdir ke-12
-mkdir xyz-15
-mkdir abc-20
+## 💡 팁
+
+1. **단일 답변**: 모든 CSV에서 동일한 답변만 있으면 LLM을 호출하지 않고 바로 사용
+2. **검증**: `strict_validation=True`로 설정하면 답변 검증 수행
+3. **로깅**: 처음 몇 개 예제의 프롬프트와 답변이 출력되어 확인 가능
+4. **GPU**: CUDA가 있으면 자동으로 GPU 사용
+
+## 🐛 문제 해결
+
+### CSV 파일을 찾을 수 없음
 ```
-
-### 브랜치 및 폴더 예시
-- 브랜치: `ke-12` → 폴더: `ke-12/`
-- 브랜치: `xyz-15` → 폴더: `xyz-15/`
-- 브랜치: `abc-20` → 폴더: `abc-20/`
-
-### 브랜치 작업 흐름
-```bash
-# 1. main 브랜치 최신화
-git checkout main
-git pull origin main
-
-# 2. 새 실험 브랜치 생성
-git checkout -b ke-25
-
-# 3. 실험 폴더 생성
-mkdir ke-25
-
-# 4. 작업 및 커밋
-# ... 코드 작성 ...
-git add .
-git commit -m "[FEAT] ke-25 실험 코드 추가"
-
-# 5. 브랜치 푸시
-git push origin ksh-25
+ValueError: No CSV files found in ./csv
 ```
+→ `./csv` 폴더에 `.csv` 파일이 있는지 확인
 
-## 커밋 메시지 작성 가이드
+### 메모리 부족
+→ `config.py`에서 `batch_size`를 줄이거나 더 작은 모델 사용
 
-### 커밋 메시지 형식
-커밋 메시지는 다음 형식을 따라 작성합니다:
-
-```
-[분류] 제목
-
-- 디테일
-```
-
-### 커밋 타입 (분류)
-- `[FEAT]`: 새로운 기능 추가
-- `[EXP]`: 새 실험 추가 (모델, 하이퍼파라미터 등)
-- `[MODEL]`: 모델 아키텍처 변경 또는 새로운 모델 구현
-- `[DATA]`: 데이터 전처리, 증강, 분석 관련
-- `[CONFIG]`: 설정 파일 변경 (하이퍼파라미터, 경로 등)
-- `[RESULT]`: 실험 결과 기록 및 로그
-- `[EVAL]`: 평가 메트릭, 평가 스크립트 관련
-- `[FIX]`: 버그 수정
-- `[DOCS]`: 문서 수정 (README, 주석 등)
-- `[STYLE]`: 코드 포맷팅, 세미콜론 누락 등
-- `[REFACTOR]`: 코드 리팩토링
-- `[TEST]`: 테스트 코드 추가 및 수정
-- `[CHORE]`: 빌드 업무 수정, 패키지 매니저 설정 등
-- `[COMMENT]`: 주석 추가 및 수정
-- `[RENAME]`: 파일 또는 폴더명 변경
-- `[REMOVE]`: 파일 삭제
-
-### 커밋 메시지 예시
-```
-[EXP] exp-1: BERT-base baseline 실험 추가
-
-- BERT-base 모델 학습 코드 구현
-- 학습률 3e-5, 배치 사이즈 16 설정
-```
-
-```
-[MODEL] RoBERTa-large 모델 아키텍처 추가
-
-- RoBERTa-large 기반 MRC 모델 구현
-- 커스텀 헤드 레이어 추가
-```
-
-```
-[DATA] 데이터 전처리 파이프라인 개선
-
-- 컨텍스트 길이 최적화 (512 → 384)
-- 토큰화 전략 변경 (문장 단위 분할)
-```
-
-```
-[RESULT] exp-2 실험 결과 기록
-
-- EM Score: 85.2, F1 Score: 91.5
-- 학습 loss 곡선 및 평가 결과 저장
-```
-
-```
-[FIX] 데이터 로더 메모리 누수 문제 수정
-
-- 배치 처리 시 불필요한 텐서 메모리 해제
-- 데이터셋 크기 제한 로직 개선
-```
-
-## 이슈와 커밋 메시지 연결 방법
-
-### GitHub 이슈 연결
-커밋 메시지에서 이슈를 언급하면 자동으로 연결됩니다.
-
-**형식:**
-- `#이슈번호` - 커밋 메시지에 포함
-- `Closes #이슈번호` - 이슈를 자동으로 닫음
-- `Fixes #이슈번호` - 버그 이슈를 자동으로 닫음
-- `Resolves #이슈번호` - 이슈 해결을 표시
-
-**예시:**
-```
-[EXP] exp-3: 데이터 증강 실험 추가 #12
-
-- Back-translation 기반 데이터 증강 구현
-- 증강된 데이터셋으로 모델 학습
-```
-
-```
-[FIX] 학습 중 메모리 부족 오류 수정 Fixes #15
-
-- 배치 사이즈 동적 조정 로직 추가
-- 그래디언트 누적 기법 적용
-```
-
-### 여러 이슈 언급
-여러 이슈를 동시에 언급할 수 있습니다:
-```
-[EVAL] 평가 스크립트 개선 Closes #10, #11
-
-- Exact Match 및 F1 Score 계산 함수 최적화
-- 대용량 데이터셋 평가 지원 추가
-```
-
+### 답변이 보기와 일치하지 않음
+→ `temperature`를 낮추거나 (0.1 → 0.05) 프롬프트 확인

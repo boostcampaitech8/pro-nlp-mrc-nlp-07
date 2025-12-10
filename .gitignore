@@ -21,6 +21,8 @@ build/
 # 폴더는 유지하되 내용물만 무시
 data/*
 !data/.gitkeep
+csv/*
+!csv/.gitkeep
 *.tar.gz
 *.zip
 *.csv
