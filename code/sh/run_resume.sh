@@ -8,9 +8,9 @@ DATA_PATH="../data/train_dataset_hybrid_neg_v1"  # 10만개 데이터
 TEST_DATA_PATH="../data/test_dataset"
 
 # [수정] 방금 학습이 완료된 TAPT 모델 경로
-TAPT_OUTPUT_DIR="./models/roberta_large_tapt"
-FINAL_QA_OUTPUT_DIR="./models/roberta_large_tapt_qa"
-SUBMISSION_DIR="./outputs/submission_tapt_roberta"
+TAPT_OUTPUT_DIR="./models/roberta_large_tapt_qa"
+FINAL_QA_OUTPUT_DIR="./models/roberta_large_tapt_qa_5EP"
+SUBMISSION_DIR="./outputs/submission_tapt_roberta_5ep"
 
 echo "================================================================"
 echo " [Step 2] QA Fine-tuning (Start)"
@@ -30,14 +30,14 @@ python train_roberta.py \
   --model_name_or_path ${TAPT_OUTPUT_DIR} \
   --dataset_name ${DATA_PATH} \
   --do_train \
-  --num_train_epochs 3 \
+  --num_train_epochs 2 \
   --per_device_train_batch_size 4 \
   --gradient_accumulation_steps 4 \
-  --learning_rate 1e-5 \
+  --learning_rate 5e-6 \
   --fp16 \
   --logging_steps 500 \
   --save_strategy "epoch" \
-  --save_total_limit 1
+  --save_total_limit 2
 
 echo ""
 echo "================================================================"
