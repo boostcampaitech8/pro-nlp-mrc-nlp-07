@@ -116,7 +116,7 @@ def run_sparse_retrieval(
 
     # 1. 캐시 파일 경로 확인 (top_k 값에 따라 자동 설정)
     # 예: retrieval_results_top10.csv
-    cache_file = f"./retrieval_results_top{data_args.top_k_retrieval}.csv"
+    cache_file = f"./cache/retrieval_results_top{data_args.top_k_retrieval}.csv"
     
     if os.path.exists(cache_file):
         print(f"📦 Found cached retrieval results! Loading from {cache_file}...")
