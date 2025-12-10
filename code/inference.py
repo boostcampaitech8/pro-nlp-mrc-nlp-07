@@ -4,6 +4,8 @@ Open-Domain Question Answering 을 수행하는 inference 코드 입니다.
 대부분의 로직은 train.py 와 비슷하나 retrieval, predict 부분이 추가되어 있습니다.
 """
 
+import csv
+import json
 import logging
 import os
 import sys
@@ -50,7 +52,7 @@ except ImportError:
     logger.warning("vLLM is not installed. Install with 'pip install vllm' to use faster inference.")
     
 
-MAX_INPUT_LENGTH = 2048 * 4
+MAX_INPUT_LENGTH = 2048 * 3
 
 
 # 모델별 설정 딕셔너리 (확장 가능한 구조)
@@ -325,6 +327,7 @@ def run_hybrid_retrieval(
     retriever = HybridRetrieval(
         dataset_path=data_args.dataset_name,
         context_path=os.path.join(data_path, context_path),
+        is_eval=training_args.do_eval,  # do_eval일 때 validation split만 사용
     )
     
     # Hybrid retrieval 수행
@@ -658,10 +661,9 @@ def run_mrc_generation(
     # 토큰 길이 통계 수집
     token_lengths = []
     truncated_count = 0
-    max_input_length = MAX_INPUT_LENGTH   # Transformers 경로에서 사용하는 max_length (top-10 retrieval 대응)
     
     logger.info(f"Processing {len(datasets['validation'])} examples with retrieved contexts...")
-    logger.info(f"Max input token length: {max_input_length} (Transformers) / {vllm_model.max_model_len if use_vllm and vllm_model else 'N/A'} (vLLM)")
+    logger.info(f"Max input token length: {MAX_INPUT_LENGTH} (Transformers) / {vllm_model.max_model_len if use_vllm and vllm_model else 'N/A'} (vLLM)")
     
     # vLLM 사용 시 torch.no_grad() 불필요, transformers 사용 시 필요
     if use_vllm:
@@ -704,11 +706,11 @@ def run_mrc_generation(
                 # 실패 시 빈 답변 반환
                 answer = ""
             
-                # 메모리 정리 (각 예제 처리 후)
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                
-                predictions[example_id] = answer
+            # 메모리 정리 (각 예제 처리 후)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            predictions[example_id] = answer
     else:
         # Transformers 사용 시 torch.no_grad() 필요
         with torch.no_grad():
@@ -733,15 +735,15 @@ def run_mrc_generation(
                         [text], 
                         return_tensors="pt",
                         truncation=True,
-                        max_length=max_input_length,
+                        max_length=MAX_INPUT_LENGTH,
                     ).to(model.device)
                     
                     # 잘렸는지 확인
                     token_length_after = model_inputs.input_ids.shape[1]
-                    if token_length_before > max_input_length:
+                    if token_length_before > MAX_INPUT_LENGTH:
                         truncated_count += 1
                         logger.warning(
-                            f"Example {example_id}: Input token length ({token_length_before}) exceeds max_length ({max_input_length}). "
+                            f"Example {example_id}: Input token length ({token_length_before}) exceeds max_length ({MAX_INPUT_LENGTH}). "
                             f"Truncated to {token_length_after} tokens. Context char length: {len(context)}"
                         )
                     
@@ -759,7 +761,6 @@ def run_mrc_generation(
                     
                     if not answer or len(answer) == 0:
                         answer = ""
-                        
                 except Exception as e:
                     logger.warning(f"Error generating answer for example {example_id}: {e}")
                     # 실패 시 빈 답변 반환
@@ -779,6 +780,19 @@ def run_mrc_generation(
         json.dump(predictions, f, ensure_ascii=False, indent=4)
     
     logger.info(f"Predictions saved to {output_file}")
+    
+    # predictions_submit.csv 저장 (베이스라인 코드와 동일한 형식)
+    # 데이터셋의 원래 순서를 유지하기 위해 데이터셋을 순회하면서 저장
+    csv_file = os.path.join(training_args.output_dir, "predictions_submit.csv")
+    with open(csv_file, "w", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter="\t")
+        # 데이터셋의 원래 순서대로 저장 (베이스라인 코드와 동일)
+        for example in datasets["validation"]:
+            example_id = example["id"]
+            if example_id in predictions:
+                writer.writerow([example_id, predictions[example_id]])
+    
+    logger.info(f"Predictions CSV saved to {csv_file}")
     
     # 토큰 길이 통계 출력
     if token_lengths:
@@ -800,7 +814,7 @@ def run_mrc_generation(
         logger.info(f"  95th percentile: {p95_length:.1f} tokens")
         logger.info(f"  99th percentile: {p99_length:.1f} tokens")
         max_vllm_len = vllm_model.max_model_len if use_vllm and vllm_model and hasattr(vllm_model, 'max_model_len') else None
-        max_allowed_str = f"{max_input_length} tokens (Transformers)" if not use_vllm else (f"{max_vllm_len} tokens (vLLM)" if max_vllm_len else "N/A")
+        max_allowed_str = f"{MAX_INPUT_LENGTH} tokens (Transformers)" if not use_vllm else (f"{max_vllm_len} tokens (vLLM)" if max_vllm_len else "N/A")
         logger.info(f"  Max allowed: {max_allowed_str}")
         
         if truncated_count > 0:
@@ -812,6 +826,7 @@ def run_mrc_generation(
     
     # 평가 (do_eval인 경우)
     if training_args.do_eval and answer_column_name:
+        logger.info("*** Evaluate ***")
         metric = evaluate.load("squad")
         formatted_predictions = [
             {"id": k, "prediction_text": v} for k, v in predictions.items()
@@ -822,7 +837,12 @@ def run_mrc_generation(
         ]
         
         metrics = metric.compute(predictions=formatted_predictions, references=references)
-        logger.info(f"Evaluation metrics: {metrics}")
+        metrics["eval_samples"] = len(datasets["validation"])
+        
+        # 평가 결과 출력 (run_mrc와 동일한 형식)
+        logger.info("***** Evaluation results *****")
+        for key, value in sorted(metrics.items()):
+            logger.info(f"  {key} = {value}")
         
         # 메트릭 저장
         metrics_file = os.path.join(training_args.output_dir, "eval_results.json")

@@ -29,14 +29,16 @@ class HybridRetrieval:
         dataset_path="../data/train_dataset",
         context_path="../data/wikipedia_documents.json",
         dense_model_name="BAAI/bge-m3",
-        bm25_tokenizer_name="klue/roberta-large"
+        bm25_tokenizer_name="klue/roberta-large",
+        is_eval=False
     ):
         self.dataset_path = dataset_path
         self.context_path = context_path
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.is_eval = is_eval
         
         # 1. 데이터 로드
-        self.contexts, self.dataset = self.load_data()
+        self.contexts, self.dataset, self.dataset_split = self.load_data(is_eval=is_eval)
         
         # 2. BM25 초기화
         print(f"Loading BM25 Tokenizer: {bm25_tokenizer_name}...")
@@ -54,7 +56,7 @@ class HybridRetrieval:
 
     # ======================== retriever_hybrid.py 파일 (load_data 함수만) ========================
 
-    def load_data(self):
+    def load_data(self, is_eval=False):
         """dataset_path에 따라 validation/test 셋을 유연하게 로드"""
         print("Loading Data...")
         with open(self.context_path, "r", encoding="utf-8") as f:
@@ -65,27 +67,25 @@ class HybridRetrieval:
         
         # ------------------ [수정된 로직 시작] ------------------
         
+        # is_eval=True일 때는 validation split만 사용 (train.py와 동일)
+        if is_eval:
+            if 'validation' in org_dataset:
+                ds = org_dataset["validation"].flatten_indices()
+                dataset_split = "validation"
+                print("Using 'validation' split for evaluation (do_eval=True).")
+            else:
+                raise ValueError("--do_eval requires a validation dataset, but 'validation' split not found.")
+        
         # 1. 'test' 키가 있으면 test split 사용 (최종 제출 시)
-        if 'test' in org_dataset:
+        elif 'test' in org_dataset:
             ds = org_dataset["test"].flatten_indices() 
+            dataset_split = "test"
             print("Using 'test' split for prediction.")
-
-        # 2. 'train'과 'validation' 키가 모두 있으면 합쳐서 사용 (로컬 평가 시)
-        elif 'train' in org_dataset and 'validation' in org_dataset:
-            print("Using combined 'train'/'validation' splits for evaluation.")
-            ds = concatenate_datasets([
-                org_dataset["train"].flatten_indices(),
-                org_dataset["validation"].flatten_indices(),
-            ])
-            
-        # 3. 'validation' 키만 있는 경우 (Validation 데이터셋만 로드했을 경우)
-        elif 'validation' in org_dataset:
-            ds = org_dataset["validation"].flatten_indices()
-            print("Using 'validation' split only.")
 
         # 4. 그 외의 경우 (예외 처리)
         elif org_dataset.keys():
             key = list(org_dataset.keys())[0]
+            dataset_split = key
             print(f"Using single split '{key}' for prediction/evaluation.")
             ds = org_dataset[key].flatten_indices()
         else:
@@ -93,7 +93,7 @@ class HybridRetrieval:
         
         # ------------------ [수정된 로직 끝] ------------------
             
-        return contexts, ds
+        return contexts, ds, dataset_split
         
     def init_bm25(self, pickle_name="bm25_hybrid_embedding.bin"):
         # BM25 인덱스 생성 또는 로드
@@ -123,12 +123,16 @@ class HybridRetrieval:
         return model
     
     def get_embedding_filename(self):
-        """임베딩 파일명 생성 (모델명과 context 경로 기반)"""
+        """임베딩 파일명 생성 (모델명, context 경로, 데이터셋 split 기반)"""
         # 모델명에서 파일명에 사용할 수 없는 문자 제거
         model_safe_name = self.dense_model_name.replace("/", "_").replace("\\", "_")
         # context_path의 파일명 사용
         context_basename = os.path.basename(self.context_path).replace(".json", "")
-        embedding_filename = f"corpus_embeddings_{model_safe_name}_{context_basename}.pt"
+        # 데이터셋 split 포함 (is_eval일 때만 split 구분)
+        if self.is_eval: 
+            embedding_filename = f"corpus_embeddings_{model_safe_name}_{context_basename}_{self.dataset_split}.pt"
+        else:
+            embedding_filename = f"corpus_embeddings_{model_safe_name}_{context_basename}.pt"
         return embedding_filename
     
     def init_corpus_embeddings(self):
