@@ -217,7 +217,7 @@ def main():
                 # vLLM으로 모델 로드
                 vllm_model = LLM(
                     model=model_args.model_name_or_path,
-                    max_model_len=4096,  # context 길이 제한 (top-10 retrieval 대응)
+                    max_model_len=2048,  # context 길이 제한 (top-10 retrieval 대응)
                     gpu_memory_utilization=0.9,  # GPU 메모리 사용률
                     trust_remote_code=True,
                 )
@@ -535,10 +535,25 @@ def run_mrc_generation(
             {"role": "user", 
              "content": f"""다음 지문에는 질문에 대한 답이 포함되어 있습니다. 
              지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.
+             정답은 한 단어 또는 짧은 구문으로 추출하세요.
              질문: {question}
              지문: {context}
              답변:"""}
         ]
+    
+    def prepare_qa_prompt(context: str, question: str, tokenizer) -> str:
+        """QA 프롬프트 텍스트 준비 (chat template 시도, 실패 시 fallback)"""
+        messages = create_qa_messages(context, question)
+        try:
+            text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except (AttributeError, TypeError):
+            # Chat template이 없는 경우 fallback: messages의 content를 직접 사용
+            text = messages[0]["content"]
+        return text
     
     # eval 혹은 prediction에서만 사용함
     column_names = datasets["validation"].column_names
@@ -573,7 +588,7 @@ def run_mrc_generation(
     # 토큰 길이 통계 수집
     token_lengths = []
     truncated_count = 0
-    max_input_length = 4096  # Transformers 경로에서 사용하는 max_length (top-10 retrieval 대응)
+    max_input_length = 2048  # Transformers 경로에서 사용하는 max_length (top-10 retrieval 대응)
     
     logger.info(f"Processing {len(datasets['validation'])} examples with retrieved contexts...")
     logger.info(f"Max input token length: {max_input_length} (Transformers) / {vllm_model.max_model_len if use_vllm and vllm_model else 'N/A'} (vLLM)")
@@ -589,19 +604,8 @@ def run_mrc_generation(
             generation_kwargs = model_config["generation_kwargs"].copy()
             
             try:
-                # QA 태스크에 맞게 chat template 구성 (지문에서 직접 추출)
-                messages = create_qa_messages(context, question)
-                
-                # Chat template 적용 시도 (모든 모델에 대해 통합)
-                try:
-                    text = tokenizer.apply_chat_template(
-                        messages,
-                        tokenize=False,
-                        add_generation_prompt=True,
-                    )
-                except (AttributeError, TypeError):
-                    # Chat template이 없는 경우 fallback: 직접 문자열 생성
-                    text = f"다음 지문에는 질문에 대한 답이 포함되어 있습니다. 지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
+                # QA 프롬프트 준비
+                text = prepare_qa_prompt(context, question, tokenizer)
                 
                 # 토큰 길이 확인 (vLLM)
                 encoded = tokenizer.encode(text, add_special_tokens=False)
@@ -611,11 +615,10 @@ def run_mrc_generation(
                 
                 if token_length > max_vllm_length:
                     truncated_count += 1
-                    if truncated_count <= 5:  # 처음 5개만 상세 로깅
-                        logger.warning(
-                            f"Example {example_id}: Input token length ({token_length}) exceeds vLLM max_model_len ({max_vllm_length}). "
-                            f"Context will be truncated. Context char length: {len(context)}"
-                        )
+                    logger.warning(
+                        f"Example {example_id}: Input token length ({token_length}) exceeds vLLM max_model_len ({max_vllm_length}). "
+                        f"Context will be truncated. Context char length: {len(context)}"
+                    )
                 
                 # vLLM 사용
                 outputs = vllm_model.generate([text], sampling_params)
@@ -647,19 +650,8 @@ def run_mrc_generation(
                 generation_kwargs = model_config["generation_kwargs"].copy()
                 
                 try:
-                    # QA 태스크에 맞게 chat template 구성 (지문에서 직접 추출)
-                    messages = create_qa_messages(context, question)
-                    
-                    # Chat template 적용 시도 (모든 모델에 대해 통합)
-                    try:
-                        text = tokenizer.apply_chat_template(
-                            messages,
-                            tokenize=False,
-                            add_generation_prompt=True,
-                        )
-                    except (AttributeError, TypeError):
-                        # Chat template이 없는 경우 fallback: 직접 문자열 생성
-                        text = f"다음 지문에는 질문에 대한 답이 포함되어 있습니다. 지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.\n\n지문: {context}\n\n질문: {question}\n\n답변:"
+                    # QA 프롬프트 준비
+                    text = prepare_qa_prompt(context, question, tokenizer)
                     
                     # 토큰 길이 확인 (Transformers)
                     encoded_before = tokenizer.encode(text, add_special_tokens=False)
@@ -678,11 +670,10 @@ def run_mrc_generation(
                     token_length_after = model_inputs.input_ids.shape[1]
                     if token_length_before > max_input_length:
                         truncated_count += 1
-                        if truncated_count <= 5:  # 처음 5개만 상세 로깅
-                            logger.warning(
-                                f"Example {example_id}: Input token length ({token_length_before}) exceeds max_length ({max_input_length}). "
-                                f"Truncated to {token_length_after} tokens. Context char length: {len(context)}"
-                            )
+                        logger.warning(
+                            f"Example {example_id}: Input token length ({token_length_before}) exceeds max_length ({max_input_length}). "
+                            f"Truncated to {token_length_after} tokens. Context char length: {len(context)}"
+                        )
                     
                     # Generation
                     generated_ids = model.generate(
