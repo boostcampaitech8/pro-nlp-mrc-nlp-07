@@ -49,6 +49,7 @@ class HybridRetrieval:
         self.dense_model_name = dense_model_name
         
         # 4. Passage Embedding 미리 생성 또는 로드
+        print("Initializing corpus embeddings...")
         self.corpus_embeddings = self.init_corpus_embeddings()
 
     # ======================== retriever_hybrid.py 파일 (load_data 함수만) ========================
@@ -133,9 +134,10 @@ class HybridRetrieval:
     def init_corpus_embeddings(self):
         """Passage Embedding 생성 또는 로드"""
         embedding_filename = self.get_embedding_filename()
+        print(f"Checking for cached embeddings: {embedding_filename}")
         
         if os.path.isfile(embedding_filename):
-            print(f"Loading corpus embeddings from {embedding_filename}...")
+            print(f"✅ Found cached embeddings! Loading from {embedding_filename}...")
             try:
                 # GPU에 저장된 경우를 대비해 map_location 설정
                 corpus_embeddings = torch.load(embedding_filename, map_location=self.device)
@@ -145,8 +147,8 @@ class HybridRetrieval:
                 print(f"⚠️  Failed to load embeddings from {embedding_filename}: {e}")
                 print("   Generating new embeddings...")
         else:
-            print(f"Embedding file not found: {embedding_filename}")
-            print("Encoding Contexts with Dense Model (This takes time)...")
+            print(f"❌ Embedding file not found: {embedding_filename}")
+            print("   Encoding Contexts with Dense Model (This takes time)...")
         
         # 임베딩 생성
         corpus_embeddings = self.dense_model.encode(

@@ -50,7 +50,7 @@ except ImportError:
     logger.warning("vLLM is not installed. Install with 'pip install vllm' to use faster inference.")
     
 
-MAX_INPUT_LENGTH = 2048 * 3
+MAX_INPUT_LENGTH = 2048 * 4
 
 
 # 모델별 설정 딕셔너리 (확장 가능한 구조)
