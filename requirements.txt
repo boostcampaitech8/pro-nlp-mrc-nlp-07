@@ -1,0 +1,20 @@
+torch
+transformers
+accelerate
+pandas
+evaluate
+
+# if use BM25 Retriever
+rank_bm25
+
+# if use Elasticsearch Retriever
+elasticsearch
+
+# torch==2.1.0
+# transformers==4.39.3
+# accelerate==0.30.0
+# pandas==2.3.3
+# evaluate==0.4.6
+
+# faiss install (if you want to)
+faiss-gpu
