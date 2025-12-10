@@ -14,6 +14,9 @@ from datasets import Dataset, concatenate_datasets, load_from_disk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from tqdm.auto import tqdm
 
+import torch
+from sentence_transformers import SentenceTransformer, util, models
+
 logger = logging.getLogger(__name__)
 
 seed = 2024
@@ -27,6 +30,275 @@ def timer(name):
     yield
     print(f"[{name}] done in {time.time() - t0:.3f} s")
 
+
+class DenseRetriever:
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-m3", # 사용할 SentenceTransformer 모델 이름
+        data_path: Optional[str] = "./data",
+        context_path: Optional[str] = "wikipedia_documents.json",
+        batch_size: int = 16, # 임베딩 시 배치 사이즈
+    ) -> NoReturn:
+        
+        self.model_name = model_name
+        self.data_path = data_path
+        self.batch_size = batch_size
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # 데이터 로드 (SparseRetrieval/BM25Retriever와 동일)
+        with open(os.path.join(data_path, context_path), "r", encoding="utf-8") as f:
+            wiki = json.load(f)
+
+        self.contexts = list(
+            dict.fromkeys([v["text"] for v in wiki.values()])
+        )
+        logger.info(f"Initialized DenseRetriever with {len(self.contexts)} unique contexts")
+        self.ids = list(range(len(self.contexts)))
+
+        self.context_to_id = {
+            text: i for i, text in enumerate(self.contexts)
+        }
+        
+        # 모델 로드 및 임베딩 준비
+        self.model = self._load_model(model_name)
+        self.p_embedding = None # Passage Embedding
+        self.indexer = None # FAISS Indexer
+        
+        self.get_dense_embedding() # 임베딩 계산/로드
+        self.build_faiss() # FAISS 인덱스 생성/로드
+
+    def _load_model(self, model_name):
+        """SentenceTransformer 모델 로드 함수 (첫 번째 코드 블록에서 가져옴)"""
+        try:
+            model = SentenceTransformer(model_name, trust_remote_code=True)
+        except Exception:
+            print(f"Warning: {model_name} 로드 중 에러 발생, Transformer 방식으로 우회 시도...")
+            word_embedding_model = models.Transformer(model_name, max_seq_length=512)
+            pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension(), pooling_mode='mean')
+            model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+        
+        model.max_seq_length = 512
+        model.to(self.device)
+        return model
+
+    def get_dense_embedding(self) -> NoReturn:
+        """Passage Embedding을 만들고 pickle로 저장하거나 로드합니다."""
+
+        pickle_name = f"dense_embedding_{self.model_name.replace('/', '_')}.bin"
+        emd_path = os.path.join(self.data_path, pickle_name)
+
+        if os.path.isfile(emd_path):
+            logger.info("Loading pre-computed dense embeddings from cache")
+            with open(emd_path, "rb") as file:
+                self.p_embedding = pickle.load(file)
+            print("Embedding pickle load.")
+        else:
+            logger.info("Computing dense embeddings for passages")
+            print("Encoding Passages...")
+            
+            # SentenceTransformer를 이용해 Passage 임베딩
+            self.model.eval()
+            with torch.no_grad():
+                self.p_embedding = self.model.encode(
+                    self.contexts, 
+                    batch_size=self.batch_size, 
+                    show_progress_bar=True, 
+                    convert_to_numpy=True # FAISS를 위해 numpy로 변환
+                )
+                
+            logger.info(f"Dense embedding shape: {self.p_embedding.shape}")
+            print(self.p_embedding.shape)
+
+            with open(emd_path, "wb") as file:
+                pickle.dump(self.p_embedding, file)
+            print("Embedding pickle saved.")
+
+    def build_faiss(self, n_list=100) -> NoReturn:
+        """Faiss indexer에 Passage Embedding을 fitting 시키거나 로드합니다."""
+
+        # indexer 파일명에 모델 이름과 n_list를 포함하여 충돌 방지
+        indexer_name = f"faiss_dense_{self.model_name.replace('/', '_')}_nlist{n_list}.index"
+        indexer_path = os.path.join(self.data_path, indexer_name)
+
+        if os.path.isfile(indexer_path):
+            logger.info(f"Loading pre-built FAISS indexer from {indexer_path}")
+            self.indexer = faiss.read_index(indexer_path)
+            print("Load Saved Faiss Indexer.")
+
+        else:
+            logger.info(f"Building FAISS indexer for dense embeddings with n_list={n_list}")
+            
+            # FAISS는 float32를 사용
+            p_emb = self.p_embedding.astype(np.float32)
+            emb_dim = p_emb.shape[-1]
+            
+            # FAISS Index 생성: IndexFlatL2(L2 거리) 또는 IndexFlatIP(내적) 사용
+            # Dense Retrieval에서는 코사인 유사도(Cosine Similarity)가 일반적이며,
+            # L2 정규화된 벡터의 내적(IP)은 코사인 유사도와 동일하므로 IndexFlatIP를 사용합니다.
+            # BGE-M3의 경우, 코사인 유사도 기반이므로 IndexFlatIP가 적절합니다.
+            # IndexFlatIP를 사용하기 위해, 미리 Passage Embedding을 L2 정규화합니다.
+            faiss.normalize_L2(p_emb)
+            
+            # IndexFlatIP를 사용
+            self.indexer = faiss.IndexFlatIP(emb_dim) 
+            self.indexer.add(p_emb)
+            
+            # Index 저장
+            faiss.write_index(self.indexer, indexer_path)
+            logger.info(f"FAISS indexer saved to {indexer_path}")
+            print("Faiss Indexer Saved.")
+            
+            # ⭐ IndexIVF 사용 시 (대규모 데이터셋):
+            # quantizer = faiss.IndexFlatIP(emb_dim)
+            # self.indexer = faiss.IndexIVFFlat(quantizer, emb_dim, n_list, faiss.METRIC_INNER_PRODUCT)
+            # self.indexer.train(p_emb)
+            # self.indexer.add(p_emb)
+            # self.indexer.nprobe = 10 
+
+
+    def retrieve(
+        self, query_or_dataset: Union[str, Dataset], topk: Optional[int] = 1
+    ) -> Union[Tuple[List, List], pd.DataFrame]:
+        """Dense Retrieval 수행 함수"""
+
+        assert (
+            self.indexer is not None
+        ), "build_faiss() 메소드를 먼저 수행해줘야합니다. (FAISS Index 로드)"
+
+        if isinstance(query_or_dataset, str):
+            doc_scores, doc_indices = self.get_relevant_doc_dense(query_or_dataset, k=topk)
+            print("[Search query]\n", query_or_dataset, "\n")
+
+            for i in range(topk):
+                print(f"Top-{i+1} passage with score {doc_scores[i]:.4f}")
+                print(self.contexts[doc_indices[i]])
+
+            return (doc_scores, [self.contexts[doc_indices[i]] for i in range(topk)])
+
+        elif isinstance(query_or_dataset, Dataset):
+            total = []
+            
+            with timer("query dense search"):
+                doc_scores, doc_indices = self.get_relevant_doc_bulk_dense(
+                    query_or_dataset["question"], k=topk
+                )
+
+            # ⭐⭐ 로그용: 실패한 ID를 저장할 리스트 정의
+            failed_ids = []
+            failed_lens = []
+            
+            for idx, example in enumerate(
+                tqdm(query_or_dataset, desc="Dense retrieval: ")
+            ):
+                tmp = {
+                    "question": example["question"],
+                    "id": example["id"],
+                    "context": " ".join(
+                        [self.contexts[pid] for pid in doc_indices[idx]]
+                    ),
+                }
+                if "context" in example.keys() and "answers" in example.keys():
+                    tmp["original_context"] = example["context"]
+                    tmp["answers"] = example["answers"]
+
+                    original_context_id = self.context_to_id.get(tmp["original_context"])
+                    is_hit_at_k = original_context_id in doc_indices[idx]
+                    tmp["is_hit_at_k"] = is_hit_at_k
+                    
+                    # ⭐⭐⭐ 정답 문서 획득 실패 시 로그 기록 로직 시작 ⭐⭐⭐
+                    if not is_hit_at_k:
+                        # ⭐⭐ 로그용: 실패 ID 리스트에 현재 ID 추가
+                        failed_ids.append(tmp['id'])
+                        failed_lens.append(len(tmp['original_context']))
+
+                        doc_scores_list = doc_scores[idx] 
+                        
+                        logger.error("-" * 60)
+                        logger.error(f"🚨 RETRIEVAL FAILURE (K={topk}) for ID: {tmp['id']}")
+                        logger.error(f"  QUESTION: {tmp['question']}")
+                        logger.error(f"  TARGET CONTEXT (GT): {tmp['original_context']}")
+                        logger.error(f"  CONTEXT LENGTH (GT): {len(tmp['original_context'])}")
+                        logger.error(f"  ANSWER : {tmp['answers']}")
+                        logger.error(f"  --- Top {topk} Retrieved Contexts and Scores ---")
+                        
+                        scores = []
+                        contentLens = []
+                        for rank in range(topk):
+                            context = self.contexts[doc_indices[idx][rank]]
+                            score = doc_scores_list[rank] 
+                            
+                            scores.append(score)
+                            contentLens.append(len(context))
+                        
+                        logger.error(f"  Scores: {scores}")
+                        logger.error(f"  Content Lengths: {contentLens}")
+                        logger.error("-" * 60)
+                    # ⭐⭐⭐ 로그 기록 로직 종료 ⭐⭐⭐
+
+                total.append(tmp)
+
+            # ⭐⭐ 로그용: 루프 종료 후 실패 ID 목록 출력 ⭐⭐
+            if failed_ids:
+                logger.error("=" * 60)
+                logger.error(f"🚨 Total {len(failed_ids)} Retrieval Failures (K={topk})")
+                logger.error(f"   Failed IDs: {failed_ids}")
+                logger.error(f"   Failed Lens: {failed_lens}")
+                logger.error("=" * 60)
+                
+            return pd.DataFrame(total)
+
+
+    def get_relevant_doc_dense(self, query: str, k: Optional[int] = 1) -> Tuple[List, List]:
+        """단일 쿼리에 대한 Dense Embedding 및 FAISS 검색"""
+        
+        # E5 계열 Prefix 추가 (BAAI/bge-m3도 E5 계열 학습 방식을 따름)
+        if "bge" in self.model_name.lower() or "e5" in self.model_name.lower():
+            query = f"query: {query}"
+        
+        self.model.eval()
+        with torch.no_grad():
+            query_embedding = self.model.encode(
+                [query], 
+                batch_size=1, 
+                show_progress_bar=False, 
+                convert_to_numpy=True
+            ).astype(np.float32)
+
+        # L2 정규화 (코사인 유사도를 위해)
+        faiss.normalize_L2(query_embedding)
+        
+        with timer("query faiss search"):
+            # D: Distance (score, 코사인 유사도 값), I: Index (context id)
+            D, I = self.indexer.search(query_embedding, k)
+        
+        return D.tolist()[0], I.tolist()[0]
+
+    def get_relevant_doc_bulk_dense(
+        self, queries: List, k: Optional[int] = 1
+    ) -> Tuple[List, List]:
+        """다수 쿼리에 대한 Dense Embedding 및 FAISS 검색"""
+        
+        # E5 계열 Prefix 추가
+        if "bge" in self.model_name.lower() or "e5" in self.model_name.lower():
+            queries = [f"query: {q}" for q in queries]
+            
+        self.model.eval()
+        with torch.no_grad():
+            query_embeddings = self.model.encode(
+                queries, 
+                batch_size=self.batch_size, 
+                show_progress_bar=True, 
+                convert_to_numpy=True
+            ).astype(np.float32)
+            
+        # L2 정규화 (코사인 유사도를 위해)
+        faiss.normalize_L2(query_embeddings)
+
+        with timer("query faiss bulk search"):
+            # D: Distance (score), I: Index (context id)
+            D, I = self.indexer.search(query_embeddings, k)
+
+        return D.tolist(), I.tolist()
 
 class SparseRetrieval:
     def __init__(
