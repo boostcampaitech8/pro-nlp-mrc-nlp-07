@@ -46,15 +46,10 @@ class HybridRetrieval:
         # 3. Dense Model 초기화
         print(f"Loading Dense Model: {dense_model_name}...")
         self.dense_model = self.init_dense_model(dense_model_name)
+        self.dense_model_name = dense_model_name
         
-        # 4. Passage Embedding 미리 생성 
-        print("Encoding Contexts with Dense Model (This takes time)...")
-        self.corpus_embeddings = self.dense_model.encode(
-            self.contexts, 
-            batch_size=16, 
-            show_progress_bar=True, 
-            convert_to_tensor=True
-        )
+        # 4. Passage Embedding 미리 생성 또는 로드
+        self.corpus_embeddings = self.init_corpus_embeddings()
 
     # ======================== retriever_hybrid.py 파일 (load_data 함수만) ========================
 
@@ -125,6 +120,51 @@ class HybridRetrieval:
         model.max_seq_length = 512
         model.to(self.device)
         return model
+    
+    def get_embedding_filename(self):
+        """임베딩 파일명 생성 (모델명과 context 경로 기반)"""
+        # 모델명에서 파일명에 사용할 수 없는 문자 제거
+        model_safe_name = self.dense_model_name.replace("/", "_").replace("\\", "_")
+        # context_path의 파일명 사용
+        context_basename = os.path.basename(self.context_path).replace(".json", "")
+        embedding_filename = f"corpus_embeddings_{model_safe_name}_{context_basename}.pt"
+        return embedding_filename
+    
+    def init_corpus_embeddings(self):
+        """Passage Embedding 생성 또는 로드"""
+        embedding_filename = self.get_embedding_filename()
+        
+        if os.path.isfile(embedding_filename):
+            print(f"Loading corpus embeddings from {embedding_filename}...")
+            try:
+                # GPU에 저장된 경우를 대비해 map_location 설정
+                corpus_embeddings = torch.load(embedding_filename, map_location=self.device)
+                print(f"✅ Successfully loaded {len(corpus_embeddings)} embeddings from cache.")
+                return corpus_embeddings
+            except Exception as e:
+                print(f"⚠️  Failed to load embeddings from {embedding_filename}: {e}")
+                print("   Generating new embeddings...")
+        else:
+            print(f"Embedding file not found: {embedding_filename}")
+            print("Encoding Contexts with Dense Model (This takes time)...")
+        
+        # 임베딩 생성
+        corpus_embeddings = self.dense_model.encode(
+            self.contexts, 
+            batch_size=16, 
+            show_progress_bar=True, 
+            convert_to_tensor=True
+        )
+        
+        # 임베딩 저장
+        print(f"Saving corpus embeddings to {embedding_filename}...")
+        try:
+            torch.save(corpus_embeddings, embedding_filename)
+            print(f"✅ Successfully saved embeddings to {embedding_filename}")
+        except Exception as e:
+            print(f"⚠️  Failed to save embeddings: {e}")
+        
+        return corpus_embeddings
 
     def min_max_normalize(self, scores):
         # 정규화 로직
