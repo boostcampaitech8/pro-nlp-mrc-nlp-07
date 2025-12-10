@@ -41,7 +41,7 @@ class ElasticSearchRetrieval:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # 1. Elasticsearch 설정
-        self.es = Elasticsearch("http://localhost:9200", timeout=30, max_retries=10, retry_on_timeout=True)
+        self.es = Elasticsearch("http://localhost:9200")
         
         # 2. Context 데이터 로드
         with open(os.path.join(data_path, context_path), "r", encoding="utf-8") as f:
