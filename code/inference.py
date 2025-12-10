@@ -47,6 +47,9 @@ try:
 except ImportError:
     VLLM_AVAILABLE = False
     logger.warning("vLLM is not installed. Install with 'pip install vllm' to use faster inference.")
+    
+
+MAX_INPUT_LENGTH = 2048
 
 
 # 모델별 설정 딕셔너리 (확장 가능한 구조)
@@ -217,7 +220,7 @@ def main():
                 # vLLM으로 모델 로드
                 vllm_model = LLM(
                     model=model_args.model_name_or_path,
-                    max_model_len=2048,  # context 길이 제한 (top-10 retrieval 대응)
+                    max_model_len=MAX_INPUT_LENGTH ,  # context 길이 제한 (top-10 retrieval 대응)
                     gpu_memory_utilization=0.9,  # GPU 메모리 사용률
                     trust_remote_code=True,
                 )
@@ -589,7 +592,7 @@ def run_mrc_generation(
     # 토큰 길이 통계 수집
     token_lengths = []
     truncated_count = 0
-    max_input_length = 2048  # Transformers 경로에서 사용하는 max_length (top-10 retrieval 대응)
+    max_input_length = MAX_INPUT_LENGTH   # Transformers 경로에서 사용하는 max_length (top-10 retrieval 대응)
     
     logger.info(f"Processing {len(datasets['validation'])} examples with retrieved contexts...")
     logger.info(f"Max input token length: {max_input_length} (Transformers) / {vllm_model.max_model_len if use_vllm and vllm_model else 'N/A'} (vLLM)")
@@ -612,7 +615,7 @@ def run_mrc_generation(
                 encoded = tokenizer.encode(text, add_special_tokens=False)
                 token_length = len(encoded)
                 token_lengths.append(token_length)
-                max_vllm_length = vllm_model.max_model_len if hasattr(vllm_model, 'max_model_len') else 2048
+                max_vllm_length = vllm_model.max_model_len if hasattr(vllm_model, 'max_model_len') else MAX_INPUT_LENGTH 
                 
                 if token_length > max_vllm_length:
                     truncated_count += 1
