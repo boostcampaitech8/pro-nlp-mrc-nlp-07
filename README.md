@@ -1,185 +1,189 @@
-# 프로젝트 시작 가이드
+# Readme
 
-## Git Clone 및 초기 설정
+## 소개
 
-### 1. 프로젝트 클론
-```bash
-cd /data/ephemeral/home/{자신의 캠퍼 아이디}/
-git clone https://{git username}:{PAT (github token (classic 추천))}@github.com/boostcampaitech8/pro-nlp-mrc-nlp-07.git
-cd pro-nlp-mrc-nlp-07
+Open-Domain Question Answering (ODQA) 대회를 위한 베이스라인 코드 
+
+## 설치 방법
+
+### 요구 사항
+
+```
+# data (51.2 MB)
+tar -xzf data.tar.gz
+
+# 필요한 파이썬 패키지 설치. 
+pip install -r requirements.txt
 ```
 
-### 2. Git 사용자 정보 설정
-각 프로젝트 폴더마다 독립적으로 사용자 정보를 설정하기 위해 `--local` 옵션을 사용합니다.
+### 환경 변수 설정
 
-```bash
-git config --local user.name "사용자이름"
-git config --local user.email "이메일@example.com"
-```
+Hugging Face Hub에 모델을 업로드하기 위해 `.env` 파일을 생성하고 토큰을 설정합니다.
 
-> **참고**: `--local` 옵션을 사용하면 해당 저장소에만 설정이 적용되므로, 다른 폴더의 프로젝트에서는 다른 깃허브 계정을 사용할 수 있습니다.
-
-설정 확인:
-```bash
-git config --local --list
-```
-
-## 브랜치 전략
-
-### 기본 브랜치
-- default 브랜치: `feedback`
-- **작업 브랜치: `main` 브랜치에서 세부 브랜치를 나눠서 작업합니다.**
-
-### 브랜치 생성 및 작업 흐름
-
-1. **main 브랜치로 전환**
-```bash
-git checkout main
-git pull origin main
-```
-
-2. **실험 브랜치 생성**
-브랜치명 형식: `{팀원들의 이니셜}-{issue num}`
+`.env`파일은 `pro-nlp-mrc-nlp-07` 폴더 바로 아래에 생성합니다.
 
 ```bash
-git checkout -b ke-12
-git checkout -b xyz-15
-git checkout -b abc-20
+# 프로젝트 루트 디렉토리에 .env 파일 생성
+echo "HF_TOKEN=your_huggingface_token_here" > .env
 ```
 
-3. **실험 폴더 생성**
-브랜치를 생성한 후, 각 실험별로 폴더를 만듭니다.
-폴더명 형식: `{팀원들의 이니셜}-{issue num}` (브랜치명과 동일)
+> **참고**: `.env` 파일은 `.gitignore`에 포함되어 있어 Git에 커밋되지 않습니다. 각 팀원이 자신의 토큰을 설정해야 합니다.
+
+## 파일 구성
+
+
+### 저장소 구조
 
 ```bash
-mkdir ke-12
-mkdir xyz-15
-mkdir abc-20
+../data/                 # 전체 데이터. 아래 상세 설명
+./assets/                # readme 에 필요한 이미지 저장 
+requirements.txt         # 요구사항 설치 파일
+retrieval.py             # sparse retreiver 모듈 제공 
+arguments.py             # 실행되는 모든 argument가 dataclass 의 형태로 저장되어있음
+trainer_qa.py            # MRC 모델 학습에 필요한 trainer 제공.
+utils_qa.py              # 기타 유틸 함수 제공 
+
+train.py                 # MRC, Retrieval 모델 학습 및 평가 
+inference.py		     # ODQA 모델 평가 또는 제출 파일 (predictions.json) 생성
 ```
 
-### 브랜치 및 폴더 예시
-- 브랜치: `ke-12` → 폴더: `ke-12/`
-- 브랜치: `xyz-15` → 폴더: `xyz-15/`
-- 브랜치: `abc-20` → 폴더: `abc-20/`
+## 데이터 소개
 
-### 브랜치 작업 흐름
+아래는 제공하는 데이터셋의 분포를 보여줍니다.
+
+![데이터 분포](./assets/dataset.png)
+
+데이터셋은 편의성을 위해 Huggingface 에서 제공하는 datasets를 이용하여 pyarrow 형식의 데이터로 저장되어있습니다. 다음은 데이터셋의 구성입니다.
+
 ```bash
-# 1. main 브랜치 최신화
-git checkout main
-git pull origin main
-
-# 2. 새 실험 브랜치 생성
-git checkout -b ke-25
-
-# 3. 실험 폴더 생성
-mkdir ke-25
-
-# 4. 작업 및 커밋
-# ... 코드 작성 ...
-git add .
-git commit -m "[FEAT] ke-25 실험 코드 추가"
-
-# 5. 브랜치 푸시
-git push origin ksh-25
+../data/                        # 전체 데이터
+    ./train_dataset/           # 학습에 사용할 데이터셋. train 과 validation 으로 구성 
+    ./test_dataset/            # 제출에 사용될 데이터셋. validation 으로 구성 
+    ./wikipedia_documents.json # 위키피디아 문서 집합. retrieval을 위해 쓰이는 corpus.
 ```
 
-## 커밋 메시지 작성 가이드
+data에 대한 argument 는 `arguments.py` 의 `DataTrainingArguments` 에서 확인 가능합니다. 
 
-### 커밋 메시지 형식
-커밋 메시지는 다음 형식을 따라 작성합니다:
+# 훈련, 평가, 추론
 
-```
-[분류] 제목
+### train
 
-- 디테일
-```
+만약 arguments 에 대한 세팅을 직접하고 싶다면 `arguments.py` 를 참고해주세요. 
 
-### 커밋 타입 (분류)
-- `[FEAT]`: 새로운 기능 추가
-- `[EXP]`: 새 실험 추가 (모델, 하이퍼파라미터 등)
-- `[MODEL]`: 모델 아키텍처 변경 또는 새로운 모델 구현
-- `[DATA]`: 데이터 전처리, 증강, 분석 관련
-- `[CONFIG]`: 설정 파일 변경 (하이퍼파라미터, 경로 등)
-- `[RESULT]`: 실험 결과 기록 및 로그
-- `[EVAL]`: 평가 메트릭, 평가 스크립트 관련
-- `[FIX]`: 버그 수정
-- `[DOCS]`: 문서 수정 (README, 주석 등)
-- `[STYLE]`: 코드 포맷팅, 세미콜론 누락 등
-- `[REFACTOR]`: 코드 리팩토링
-- `[TEST]`: 테스트 코드 추가 및 수정
-- `[CHORE]`: 빌드 업무 수정, 패키지 매니저 설정 등
-- `[COMMENT]`: 주석 추가 및 수정
-- `[RENAME]`: 파일 또는 폴더명 변경
-- `[REMOVE]`: 파일 삭제
+roberta 모델을 사용할 경우 tokenizer 사용시 아래 함수의 옵션을 수정해야합니다.
+베이스라인은 klue/bert-base로 진행되니 이 부분의 주석을 해제하여 사용해주세요 ! 
+tokenizer는 train, validation (train.py), test(inference.py) 전처리를 위해 호출되어 사용됩니다.
+(tokenizer의 return_token_type_ids=False로 설정해주어야 함)
 
-### 커밋 메시지 예시
-```
-[EXP] exp-1: BERT-base baseline 실험 추가
-
-- BERT-base 모델 학습 코드 구현
-- 학습률 3e-5, 배치 사이즈 16 설정
+```python
+# train.py
+def prepare_train_features(examples):
+        # truncation과 padding(length가 짧을때만)을 통해 toknization을 진행하며, stride를 이용하여 overflow를 유지합니다.
+        # 각 example들은 이전의 context와 조금씩 겹치게됩니다.
+        tokenized_examples = tokenizer(
+            examples[question_column_name if pad_on_right else context_column_name],
+            examples[context_column_name if pad_on_right else question_column_name],
+            truncation="only_second" if pad_on_right else "only_first",
+            max_length=max_seq_length,
+            stride=data_args.doc_stride,
+            return_overflowing_tokens=True,
+            return_offsets_mapping=True,
+            # return_token_type_ids=False, # roberta모델을 사용할 경우 False, bert를 사용할 경우 True로 표기해야합니다.
+            padding="max_length" if data_args.pad_to_max_length else False,
+        )
 ```
 
-```
-[MODEL] RoBERTa-large 모델 아키텍처 추가
+```bash
+# 학습 예시 (train_dataset 사용)
+python train.py --output_dir ./models/train_dataset --do_train
 
-- RoBERTa-large 기반 MRC 모델 구현
-- 커스텀 헤드 레이어 추가
-```
+# Hugging Face Hub에 모델 업로드 (학습 완료 후 자동 업로드)
+# 모델명만 지정하면 자동으로 NLP-07-ODQA organization에 업로드됩니다
+python train.py \
+  --output_dir ./models/train_dataset \
+  --do_train \
+  --push_to_hub \
+  --hub_repo_id your-model-name
 
-```
-[DATA] 데이터 전처리 파이프라인 개선
-
-- 컨텍스트 길이 최적화 (512 → 384)
-- 토큰화 전략 변경 (문장 단위 분할)
-```
-
-```
-[RESULT] exp-2 실험 결과 기록
-
-- EM Score: 85.2, F1 Score: 91.5
-- 학습 loss 곡선 및 평가 결과 저장
-```
-
-```
-[FIX] 데이터 로더 메모리 누수 문제 수정
-
-- 배치 처리 시 불필요한 텐서 메모리 해제
-- 데이터셋 크기 제한 로직 개선
+# 또는 organization을 포함하여 직접 지정할 수도 있습니다
+python train.py \
+  --output_dir ./models/train_dataset \
+  --do_train \
+  --push_to_hub \
+  --hub_repo_id NLP-07-ODQA/your-model-name
 ```
 
-## 이슈와 커밋 메시지 연결 방법
+> **참고**: 
+> - `--push_to_hub` 옵션을 사용하면 학습 완료 후 자동으로 Hugging Face Hub에 모델과 토크나이저가 업로드됩니다.
+> - `.env` 파일에 `HF_TOKEN`이 설정되어 있어야 합니다.
+> - `--hub_repo_id`에 organization이 포함되지 않으면 자동으로 `NLP-07-ODQA` organization에 업로드됩니다.
+> - `--hub_repo_id`를 지정하지 않으면 `TrainingArguments`의 `--hub_model_id`를 사용합니다.
+> - 모델은 [NLP-07-ODQA organization](https://huggingface.co/NLP-07-ODQA)에서 확인할 수 있습니다.
 
-### GitHub 이슈 연결
-커밋 메시지에서 이슈를 언급하면 자동으로 연결됩니다.
+### eval
 
-**형식:**
-- `#이슈번호` - 커밋 메시지에 포함
-- `Closes #이슈번호` - 이슈를 자동으로 닫음
-- `Fixes #이슈번호` - 버그 이슈를 자동으로 닫음
-- `Resolves #이슈번호` - 이슈 해결을 표시
+MRC 모델의 평가는(`--do_eval`) 따로 설정해야 합니다.  위 학습 예시에 단순히 `--do_eval` 을 추가로 입력해서 훈련 및 평가를 동시에 진행할 수도 있습니다.
 
-**예시:**
-```
-[EXP] exp-3: 데이터 증강 실험 추가 #12
-
-- Back-translation 기반 데이터 증강 구현
-- 증강된 데이터셋으로 모델 학습
+```bash
+# mrc 모델 평가 (train_dataset 사용)
+python train.py --output_dir ./outputs/train_dataset --model_name_or_path ./models/train_dataset/ --do_eval 
 ```
 
-```
-[FIX] 학습 중 메모리 부족 오류 수정 Fixes #15
+### inference
 
-- 배치 사이즈 동적 조정 로직 추가
-- 그래디언트 누적 기법 적용
+retrieval 과 mrc 모델의 학습이 완료되면 `inference.py` 를 이용해 odqa 를 진행할 수 있습니다.
+
+* 학습한 모델의  test_dataset에 대한 결과를 제출하기 위해선 추론(`--do_predict`)만 진행하면 됩니다. 
+
+* 학습한 모델이 train_dataset 대해서 ODQA 성능이 어떻게 나오는지 알고 싶다면 평가(`--do_eval`)를 진행하면 됩니다.
+
+```bash
+# ODQA 실행 (로컬 모델 사용)
+# wandb 가 로그인 되어있다면 자동으로 결과가 wandb 에 저장됩니다. 아니면 단순히 출력됩니다
+python inference.py --output_dir ./outputs/test_dataset/ --dataset_name ../data/test_dataset/ --model_name_or_path ./models/train_dataset/ --do_predict
+
+# ODQA 실행 (Hugging Face Hub에서 모델 다운로드)
+# 모델명만 지정하면 자동으로 NLP-07-ODQA organization에서 찾습니다
+python inference.py \
+  --output_dir ./outputs/test_dataset/ \
+  --dataset_name ../data/test_dataset/ \
+  --hub_model_repo_id 20251207-test \
+  --do_predict
+
+# 특정 브랜치(체크포인트)에서 모델 다운로드
+python inference.py \
+  --output_dir ./outputs/test_dataset/ \
+  --dataset_name ../data/test_dataset/ \
+  --hub_model_repo_id 20251207-test \
+  --hub_model_revision checkpoint-1000 \
+  --do_predict
+
+# 전체 경로로 지정 (다른 organization의 모델)
+python inference.py \
+  --output_dir ./outputs/test_dataset/ \
+  --dataset_name ../data/test_dataset/ \
+  --hub_model_repo_id NLP-07-ODQA/20251207-test \
+  --do_predict
 ```
 
-### 여러 이슈 언급
-여러 이슈를 동시에 언급할 수 있습니다:
-```
-[EVAL] 평가 스크립트 개선 Closes #10, #11
+> **참고**: 
+> - `--hub_model_repo_id`를 사용하면 Hugging Face Hub에서 모델을 자동으로 다운로드하여 `./models/` 디렉토리에 저장합니다.
+> - 모델명만 지정하면 자동으로 `NLP-07-ODQA` organization에서 찾습니다.
+> - `--hub_model_revision`으로 특정 브랜치(체크포인트)를 지정할 수 있습니다 (기본값: `main`).
+> - 다운로드한 모델은 `./models/{모델명}` 또는 `./models/{모델명}_{브랜치명}` 폴더에 저장됩니다.
 
-- Exact Match 및 F1 Score 계산 함수 최적화
-- 대용량 데이터셋 평가 지원 추가
-```
+### How to submit
 
+`inference.py` 파일을 위 예시처럼 `--do_predict` 으로 실행하면 `--output_dir` 위치에 `predictions.json` 이라는 파일이 생성됩니다. 해당 파일을 제출해주시면 됩니다.
+
+## Things to know
+
+1. `train.py` 에서 sparse embedding 을 훈련하고 저장하는 과정은 시간이 오래 걸리지 않아 따로 argument 의 default 가 True로 설정되어 있습니다. 실행 후 sparse_embedding.bin 과 tfidfv.bin 이 저장이 됩니다. **만약 sparse retrieval 관련 코드를 수정한다면, 꼭 두 파일을 지우고 다시 실행해주세요!** 안그러면 기존 파일이 load 됩니다.
+
+2. 모델의 경우 `--overwrite_cache` 를 추가하지 않으면 같은 폴더에 저장되지 않습니다. 
+
+3. `./outputs/` 폴더 또한 `--overwrite_output_dir` 을 추가하지 않으면 같은 폴더에 저장되지 않습니다.
+
+4. **모델 공유**: 학습된 모델은 Hugging Face Hub에 업로드하여 팀원들과 공유합니다. GitHub에는 모델 체크포인트가 커밋되지 않도록 `.gitignore`에 설정되어 있습니다.
+
+5. **데이터 보안**: 데이터세트(`data/`)는 절대 GitHub에 커밋하지 않습니다. `.gitignore`에 포함되어 있지만, 실수로 커밋하지 않도록 주의하세요.
