@@ -118,3 +118,11 @@ class DataTrainingArguments:
         default=False, 
         metadata={"help": "Whether to use vLLM for faster generation inference (requires vllm package)"}
     )
+    use_hybrid_retrieval: bool = field(
+        default=False,
+        metadata={"help": "Whether to use hybrid retrieval (dense + BM25) instead of sparse retrieval"}
+    )
+    hybrid_alpha: float = field(
+        default=0.4,
+        metadata={"help": "Alpha parameter for hybrid retrieval (0.0 = BM25 only, 1.0 = Dense only)"}
+    )

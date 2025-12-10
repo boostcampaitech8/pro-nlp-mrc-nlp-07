@@ -12,3 +12,7 @@ faiss-gpu
 
 # vLLM for faster inference (optional, uncomment to use)
 # vllm>=0.8.5
+
+# Hybrid Retrieval dependencies
+sentence-transformers
+rank-bm25

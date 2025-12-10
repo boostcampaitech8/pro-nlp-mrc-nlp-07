@@ -24,6 +24,7 @@ from datasets import (
     load_from_disk,
 )
 from retrieval import SparseRetrieval
+from hybrid_retrieval import HybridRetrieval
 from trainer_qa import QuestionAnsweringTrainer
 from transformers import (
     AutoConfig,
@@ -49,7 +50,7 @@ except ImportError:
     logger.warning("vLLM is not installed. Install with 'pip install vllm' to use faster inference.")
     
 
-MAX_INPUT_LENGTH = 2048
+MAX_INPUT_LENGTH = 2048 * 2
 
 
 # 모델별 설정 딕셔너리 (확장 가능한 구조)
@@ -277,12 +278,19 @@ def main():
 
     # True일 경우 : run passage retrieval
     if data_args.eval_retrieval:
-        datasets = run_sparse_retrieval(
-            tokenizer.tokenize,
-            datasets,
-            training_args,
-            data_args,
-        )
+        if data_args.use_hybrid_retrieval:
+            datasets = run_hybrid_retrieval(
+                datasets,
+                training_args,
+                data_args,
+            )
+        else:
+            datasets = run_sparse_retrieval(
+                tokenizer.tokenize,
+                datasets,
+                training_args,
+                data_args,
+            )
 
     # eval or predict mrc model
     if training_args.do_eval or training_args.do_predict:
@@ -299,6 +307,63 @@ def main():
             )
         else:
             run_mrc(data_args, training_args, model_args, datasets, tokenizer, model)
+
+
+def run_hybrid_retrieval(
+    datasets: DatasetDict,
+    training_args: TrainingArguments,
+    data_args: DataTrainingArguments,
+    data_path: str = "../data",
+    context_path: str = "wikipedia_documents.json",
+) -> DatasetDict:
+    """
+    Hybrid Retrieval (Dense + BM25)을 수행하는 함수
+    """
+    logger.info("Using Hybrid Retrieval (Dense + BM25)")
+    
+    # HybridRetrieval 초기화
+    retriever = HybridRetrieval(
+        dataset_path=data_args.dataset_name,
+        context_path=os.path.join(data_path, context_path),
+    )
+    
+    # Hybrid retrieval 수행
+    df = retriever.retrieve_hybrid(
+        top_k=data_args.top_k_retrieval,
+        alpha=data_args.hybrid_alpha,
+        is_eval=training_args.do_eval,
+    )
+    
+    # test data 에 대해선 정답이 없으므로 id question context 로만 데이터셋이 구성됩니다.
+    if training_args.do_predict:
+        f = Features(
+            {
+                "context": Value(dtype="string", id=None),
+                "id": Value(dtype="string", id=None),
+                "question": Value(dtype="string", id=None),
+            }
+        )
+    
+    # train data 에 대해선 정답이 존재하므로 id question context answer 로 데이터셋이 구성됩니다.
+    elif training_args.do_eval:
+        f = Features(
+            {
+                "answers": Sequence(
+                    feature={
+                        "text": Value(dtype="string", id=None),
+                        "answer_start": Value(dtype="int32", id=None),
+                    },
+                    length=-1,
+                    id=None,
+                ),
+                "context": Value(dtype="string", id=None),
+                "id": Value(dtype="string", id=None),
+                "question": Value(dtype="string", id=None),
+            }
+        )
+    
+    datasets = DatasetDict({"validation": Dataset.from_pandas(df, features=f)})
+    return datasets
 
 
 def run_sparse_retrieval(
@@ -569,7 +634,8 @@ def run_mrc_generation(
     if len(datasets["validation"]) > 0:
         sample_context = datasets["validation"][0][context_column_name]
         logger.info(f"Sample retrieved context length: {len(sample_context)} characters")
-        logger.info(f"Using retrieved contexts from sparse retrieval (top-k={data_args.top_k_retrieval})")
+        retrieval_type = "hybrid retrieval" if data_args.use_hybrid_retrieval else "sparse retrieval"
+        logger.info(f"Using retrieved contexts from {retrieval_type} (top-k={data_args.top_k_retrieval})")
     
     # vLLM 사용 여부 확인
     use_vllm = vllm_model is not None
