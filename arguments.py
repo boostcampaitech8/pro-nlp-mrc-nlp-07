@@ -38,6 +38,14 @@ class DataTrainingArguments:
         default="../data/train_dataset_korquad",
         metadata={"help": "The name of the dataset to use."},
     )
+    rerank_model_path: str = field(
+        default="Dongjin-kr/ko-reranker",
+        metadata={"help": "Path to the reranker model."},
+    )
+    dense_model_name: str = field(
+        default="jhgan/ko-sroberta-multitask",
+        metadata={"help": "Name of the dense retriever model."},
+    )
     overwrite_cache: bool = field(
         default=False,
         metadata={"help": "Overwrite the cached training and evaluation sets"},

@@ -129,7 +129,8 @@ def run_sparse_retrieval(
         retriever = ElasticSearchRetrieval(
             data_path=data_path,
             context_path=context_path,
-            rerank_model_path="Dongjin-kr/ko-reranker"
+            rerank_model_path=data_args.rerank_model_path,
+            dense_model_name=data_args.dense_model_name
         )
         
         # 검색 수행
