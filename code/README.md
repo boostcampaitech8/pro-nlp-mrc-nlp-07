@@ -39,7 +39,7 @@ TAPT.py                  # TAPT 학습
 train.py                 # MRC, Retrieval 모델 학습 및 평가 (BERT 계열)
 train_roberta.py         # MRC, Retrieval 모델 학습 및 평가 (Roberta 계열)
 inference.py		     # ODQA 모델 평가 또는 제출 파일 생성 (BERT 계열)
-train_roberta.py         # ODQA 모델 평가 또는 제출 파일 생성 (Roberta 계열)
+inference_roberta.py     # ODQA 모델 평가 또는 제출 파일 생성 (Roberta 계열)
 ```
 
 ## 데이터 소개
@@ -79,4 +79,5 @@ nohup ./run~.sh > logs~.txt 2>&1 &
 
 
 5. **데이터 보안**: 데이터세트(`data/`)는 절대 GitHub에 커밋하지 않습니다. `.gitignore`에 포함되어 있지만, 실수로 커밋하지 않도록 주의하세요.
+
 
