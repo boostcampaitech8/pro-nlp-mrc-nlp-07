@@ -39,7 +39,7 @@ TAPT.py                  # TAPT 학습
 train.py                 # MRC, Retrieval 모델 학습 및 평가 (BERT 계열)
 train_roberta.py         # MRC, Retrieval 모델 학습 및 평가 (Roberta 계열)
 inference.py		     # ODQA 모델 평가 또는 제출 파일 생성 (BERT 계열)
-train_roberta.py         # ODQA 모델 평가 또는 제출 파일 생성 (Roberta 계열)
+inference_roberta.py     # ODQA 모델 평가 또는 제출 파일 생성 (Roberta 계열)
 ```
 
 ## 데이터 소개
@@ -65,6 +65,7 @@ data에 대한 argument 는 `arguments.py` 의 `DataTrainingArguments` 에서 �
 chmod +x run~.sh
 nohup ./run~.sh > logs~.txt 2>&1 &
 ```
+
 
 
 
