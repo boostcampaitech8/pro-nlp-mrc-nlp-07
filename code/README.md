@@ -61,8 +61,6 @@ data에 대한 argument 는 `arguments.py` 의 `DataTrainingArguments` 에서 �
 
 # 훈련, 평가, 추론
 
-### train
-
 ```bash
 chmod +x run~.sh
 nohup ./run~.sh > logs~.txt 2>&1 &
@@ -81,3 +79,4 @@ nohup ./run~.sh > logs~.txt 2>&1 &
 
 
 5. **데이터 보안**: 데이터세트(`data/`)는 절대 GitHub에 커밋하지 않습니다. `.gitignore`에 포함되어 있지만, 실수로 커밋하지 않도록 주의하세요.
+
