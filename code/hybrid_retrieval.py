@@ -248,7 +248,8 @@ class HybridRetrieval:
             data_entry = {
                 "id": self.dataset[i]["id"],
                 "question": queries[i],
-                "context": " ".join(retrieved_contexts), # Top-K context 합치기
+                "context": " ".join(retrieved_contexts), # Top-K context 합치기 (기존 호환성 유지)
+                "passages": retrieved_contexts,  # 개별 passage 리스트 추가 (passage 단위 chunk 처리용)
             }
             if has_answers:
                 data_entry["answers"] = self.dataset[i]["answers"]

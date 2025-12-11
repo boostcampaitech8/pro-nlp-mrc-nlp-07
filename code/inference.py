@@ -52,7 +52,32 @@ except ImportError:
     logger.warning("vLLM is not installed. Install with 'pip install vllm' to use faster inference.")
     
 
-MAX_INPUT_LENGTH = 2048 * 3
+MAX_INPUT_LENGTH = 2048
+
+# ========== 프롬프트 템플릿 상수 ==========
+STAGE1_PROMPT_TEMPLATE = """다음 지문에는 질문에 대한 답이 포함되어 있습니다. 
+지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.
+정답은 한 단어 또는 짧은 구문으로 추출하세요.
+만약에 정답이 없으면 "없음"이라고 대답하세요.
+
+질문: {question}
+지문: {context}
+
+정답과 정답을 선택한 이유를 작성해주세요.
+형식:
+정답: [답변]
+선택 이유: [이유]"""
+
+STAGE2_PROMPT_TEMPLATE = """다음은 동일한 질문에 대해 여러 지문에서 추출한 답변과 선택 이유입니다.
+이 중에서 가장 적절한 최종 답변을 선택해주세요.
+
+질문: {question}
+
+{results_text}
+
+위의 여러 답변 중에서 가장 적절한 최종 정답을 선택해주세요.
+
+최종 정답: [답변]"""
 
 
 # 모델별 설정 딕셔너리 (확장 가능한 구조)
@@ -344,6 +369,7 @@ def run_hybrid_retrieval(
                 "context": Value(dtype="string", id=None),
                 "id": Value(dtype="string", id=None),
                 "question": Value(dtype="string", id=None),
+                "passages": Sequence(Value(dtype="string", id=None), length=-1, id=None),  # passage 리스트 추가
             }
         )
     
@@ -362,6 +388,7 @@ def run_hybrid_retrieval(
                 "context": Value(dtype="string", id=None),
                 "id": Value(dtype="string", id=None),
                 "question": Value(dtype="string", id=None),
+                "passages": Sequence(Value(dtype="string", id=None), length=-1, id=None),  # passage 리스트 추가
             }
         )
     
@@ -399,6 +426,7 @@ def run_sparse_retrieval(
                 "context": Value(dtype="string", id=None),
                 "id": Value(dtype="string", id=None),
                 "question": Value(dtype="string", id=None),
+                "passages": Sequence(Value(dtype="string", id=None), length=-1, id=None),  # passage 리스트 추가
             }
         )
 
@@ -417,6 +445,7 @@ def run_sparse_retrieval(
                 "context": Value(dtype="string", id=None),
                 "id": Value(dtype="string", id=None),
                 "question": Value(dtype="string", id=None),
+                "passages": Sequence(Value(dtype="string", id=None), length=-1, id=None),  # passage 리스트 추가
             }
         )
     datasets = DatasetDict({"validation": Dataset.from_pandas(df, features=f)})
@@ -597,25 +626,95 @@ def run_mrc_generation(
     import json
     from tqdm import tqdm
     
-    logger.info("Using Generation-based QA")
+    logger.info("Using Generation-based QA with 2-stage reasoning (passage-based)")
     
-    # 프롬프트 템플릿 함수
-    def create_qa_messages(context: str, question: str) -> list:
-        """QA 메시지 생성 (chat template용)"""
-        return [
-            {"role": "user", 
-             "content": f"""다음 지문에는 질문에 대한 답이 포함되어 있습니다. 
-             지문에서 직접 답을 찾아서 그대로 제시하세요. 지문에 없는 내용을 생성하거나 설명을 추가하지 마세요.
-             정답은 한 단어 또는 짧은 구문으로 추출하세요.
-             만약에 정답이 없으면 "없음"이라고 대답하세요.
-             질문: {question}
-             지문: {context}
-             답변:"""}
-        ]
+    # ========== Passage 처리 함수들 ==========
+    def estimate_passage_tokens(passage: str, tokenizer, chars_per_token: float = 2.5) -> int:
+        """
+        Passage의 토큰 수를 추정 (전체 인코딩 없이)
+        대략적인 추정치로, 실제보다 약간 크게 추정하여 안전하게 처리
+        """
+        estimated_tokens = int(len(passage) / chars_per_token)
+        return estimated_tokens
     
-    def prepare_qa_prompt(context: str, question: str, tokenizer) -> str:
-        """QA 프롬프트 텍스트 준비 (chat template 시도, 실패 시 fallback)"""
-        messages = create_qa_messages(context, question)
+    def get_passages_for_processing(example: dict, max_passage_tokens: int, tokenizer) -> List[str]:
+        """
+        Retriever가 반환한 passage 리스트를 가져오고, 
+        각 passage가 max_passage_tokens를 초과하는 경우에만 분할
+        
+        Args:
+            example: 데이터셋 예제 (passages 필드 포함)
+            max_passage_tokens: 각 passage의 최대 토큰 수
+            tokenizer: 토크나이저
+        
+        Returns:
+            처리할 passage 리스트 (각 passage는 하나의 chunk)
+        """
+        # passages 필드가 있으면 사용, 없으면 context를 공백으로 분할 (fallback)
+        if "passages" in example and example["passages"]:
+            passages = example["passages"]
+        else:
+            # fallback: context를 공백으로 분할 (기존 방식과의 호환성)
+            context = example.get("context", "")
+            passages = [p.strip() for p in context.split(" ") if p.strip()]
+            if not passages:
+                passages = [context] if context else []
+        
+        # 각 passage가 max_passage_tokens를 초과하는지 확인하고, 필요시 분할
+        processed_passages = []
+        for passage in passages:
+            estimated_tokens = estimate_passage_tokens(passage, tokenizer)
+            if estimated_tokens <= max_passage_tokens:
+                processed_passages.append(passage)
+            else:
+                # Passage가 너무 긴 경우, 문자 단위로 분할
+                chars_per_token = 2.5
+                passage_chars = int(max_passage_tokens * chars_per_token)
+                for i in range(0, len(passage), passage_chars):
+                    chunk = passage[i:i + passage_chars]
+                    if chunk.strip():
+                        processed_passages.append(chunk.strip())
+        
+        return processed_passages
+    
+    # ========== 프롬프트 템플릿 함수들 ==========
+    def get_stage1_prompt_tokens(question: str, tokenizer) -> int:
+        """
+        Stage1 프롬프트 템플릿의 토큰 수를 계산 (context 없이)
+        질문과 빈 context로 프롬프트를 만들어 토큰 수를 계산
+        """
+        # 빈 context로 프롬프트 생성하여 토큰 수 계산
+        test_content = STAGE1_PROMPT_TEMPLATE.format(question=question, context="")
+        test_messages = [{"role": "user", "content": test_content}]
+        try:
+            test_text = tokenizer.apply_chat_template(
+                test_messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except (AttributeError, TypeError):
+            test_text = test_content
+        tokens = tokenizer.encode(test_text, add_special_tokens=False)
+        return len(tokens)
+    
+    def create_stage1_messages(context: str, question: str) -> list:
+        """1단계: 각 chunk에 대해 정답과 선택 이유를 생성하는 메시지"""
+        content = STAGE1_PROMPT_TEMPLATE.format(question=question, context=context)
+        return [{"role": "user", "content": content}]
+    
+    def create_stage2_messages(question: str, chunk_results: List[Dict[str, str]]) -> list:
+        """2단계: 여러 chunk 결과를 종합하여 최종 정답을 선택하는 메시지"""
+        results_text = ""
+        for i, result in enumerate(chunk_results, 1):
+            results_text += f"\n[Chunk {i}]\n"
+            results_text += f"정답: {result['answer']}\n"
+            results_text += f"선택 이유: {result['reason']}\n"
+        
+        content = STAGE2_PROMPT_TEMPLATE.format(question=question, results_text=results_text)
+        return [{"role": "user", "content": content}]
+    
+    def prepare_prompt(messages: list, tokenizer) -> str:
+        """프롬프트 텍스트 준비 (chat template 시도, 실패 시 fallback)"""
         try:
             text = tokenizer.apply_chat_template(
                 messages,
@@ -626,6 +725,106 @@ def run_mrc_generation(
             # Chat template이 없는 경우 fallback: messages의 content를 직접 사용
             text = messages[0]["content"]
         return text
+    
+    def generate_with_model(text: str, tokenizer, model, generation_kwargs, use_vllm: bool, vllm_model, sampling_params, max_tokens: int = 200) -> str:
+        """모델을 사용하여 텍스트 생성 (vLLM 또는 Transformers)"""
+        try:
+            if use_vllm:
+                # vLLM의 경우 max_tokens 조정
+                sampling_params.max_tokens = max_tokens
+                outputs = vllm_model.generate([text], sampling_params)
+                generated_text = outputs[0].outputs[0].text
+            else:
+                # Transformers
+                model_inputs = tokenizer(
+                    [text], 
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=MAX_INPUT_LENGTH,
+                ).to(model.device)
+                
+                # max_new_tokens 조정
+                gen_kwargs = generation_kwargs.copy()
+                gen_kwargs["max_new_tokens"] = max_tokens
+                
+                generated_ids = model.generate(
+                    **model_inputs,
+                    **gen_kwargs,
+                    eos_token_id=tokenizer.eos_token_id,
+                    pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id else tokenizer.eos_token_id,
+                )
+                
+                output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
+                generated_text = tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+                
+                # 메모리 정리
+                del model_inputs, generated_ids
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            
+            return generated_text.strip() if generated_text else ""
+        except Exception as e:
+            logger.warning(f"Error in generation: {e}")
+            return ""
+    
+    def parse_stage1_output(output: str) -> Dict[str, str]:
+        """1단계 출력을 파싱하여 정답과 이유 추출"""
+        answer = ""
+        reason = ""
+        
+        # "정답:" 또는 "답변:" 패턴 찾기
+        answer_match = None
+        for pattern in ["정답:", "답변:", "Answer:", "답:"]:
+            if pattern in output:
+                parts = output.split(pattern, 1)
+                if len(parts) > 1:
+                    answer_text = parts[1].split("\n")[0].strip()
+                    if answer_text:
+                        answer_match = answer_text
+                        break
+        
+        # "선택 이유:" 또는 "이유:" 패턴 찾기
+        reason_match = None
+        for pattern in ["선택 이유:", "이유:", "Reason:", "이유:"]:
+            if pattern in output:
+                parts = output.split(pattern, 1)
+                if len(parts) > 1:
+                    reason_text = parts[1].strip()
+                    if reason_text:
+                        reason_match = reason_text
+                        break
+        
+        if answer_match:
+            answer = answer_match
+        else:
+            # 패턴을 찾지 못한 경우 첫 줄을 정답으로 간주
+            first_line = output.split("\n")[0].strip()
+            if first_line and first_line != "없음":
+                answer = first_line
+            else:
+                answer = "없음"
+        
+        if reason_match:
+            reason = reason_match
+        else:
+            reason = "이유를 찾을 수 없음"
+        
+        return {"answer": answer, "reason": reason}
+    
+    def parse_stage2_output(output: str) -> str:
+        """2단계 출력을 파싱하여 최종 정답 추출"""
+        # "최종 정답:" 패턴 찾기
+        for pattern in ["최종 정답:", "Final Answer:", "최종답변:", "답:"]:
+            if pattern in output:
+                parts = output.split(pattern, 1)
+                if len(parts) > 1:
+                    answer = parts[1].split("\n")[0].strip()
+                    if answer:
+                        return answer
+        
+        # 패턴을 찾지 못한 경우 첫 줄을 정답으로 간주
+        first_line = output.split("\n")[0].strip()
+        return first_line if first_line else "없음"
     
     # eval 혹은 prediction에서만 사용함
     column_names = datasets["validation"].column_names
@@ -665,6 +864,9 @@ def run_mrc_generation(
     logger.info(f"Processing {len(datasets['validation'])} examples with retrieved contexts...")
     logger.info(f"Max input token length: {MAX_INPUT_LENGTH} (Transformers) / {vllm_model.max_model_len if use_vllm and vllm_model else 'N/A'} (vLLM)")
     
+    # 테스트를 위해 처음 5개만 처리 (Transformers 경로에서만 적용)
+    validation_dataset = None  # vLLM 경로에서는 전체 사용
+    
     # vLLM 사용 시 torch.no_grad() 불필요, transformers 사용 시 필요
     if use_vllm:
         # vLLM은 자체적으로 메모리 관리
@@ -676,34 +878,71 @@ def run_mrc_generation(
             generation_kwargs = model_config["generation_kwargs"].copy()
             
             try:
-                # QA 프롬프트 준비
-                text = prepare_qa_prompt(context, question, tokenizer)
+                max_vllm_length = vllm_model.max_model_len if hasattr(vllm_model, 'max_model_len') else MAX_INPUT_LENGTH
+                prompt_template_tokens = get_stage1_prompt_tokens(question, tokenizer)
+                max_passage_tokens = max_vllm_length - prompt_template_tokens - 100
                 
-                # 토큰 길이 확인 (vLLM)
-                encoded = tokenizer.encode(text, add_special_tokens=False)
-                token_length = len(encoded)
-                token_lengths.append(token_length)
-                max_vllm_length = vllm_model.max_model_len if hasattr(vllm_model, 'max_model_len') else MAX_INPUT_LENGTH 
+                # Passage 단위로 처리할 리스트 가져오기
+                passages = get_passages_for_processing(example, max_passage_tokens, tokenizer)
                 
-                if token_length > max_vllm_length:
-                    truncated_count += 1
-                    logger.warning(
-                        f"Example {example_id}: Input token length ({token_length}) exceeds vLLM max_model_len ({max_vllm_length}). "
-                        f"Context will be truncated. Context char length: {len(context)}"
+                if len(passages) == 0:
+                    answer = "없음"
+                elif len(passages) == 1:
+                    # 단일 passage인 경우 1단계만 수행
+                    stage1_messages = create_stage1_messages(passages[0], question)
+                    stage1_text = prepare_prompt(stage1_messages, tokenizer)
+                    stage1_output = generate_with_model(
+                        stage1_text, tokenizer, None, generation_kwargs,
+                        use_vllm=True, vllm_model=vllm_model, sampling_params=sampling_params,
+                        max_tokens=150
                     )
+                    chunk_result = parse_stage1_output(stage1_output)
+                    answer = chunk_result["answer"]
+                    
+                    # 토큰 길이 통계
+                    token_length = len(tokenizer.encode(stage1_text, add_special_tokens=False))
+                    token_lengths.append(token_length)
+                else:
+                    # 여러 passage인 경우 2단계 추론 수행
+                    logger.info(f"Example {example_id}: Processing {len(passages)} passages")
+                    
+                    # 1단계: 각 passage에 대해 정답과 이유 생성
+                    passage_results = []
+                    for passage in passages:
+                        stage1_messages = create_stage1_messages(passage, question)
+                        stage1_text = prepare_prompt(stage1_messages, tokenizer)
+                        stage1_output = generate_with_model(
+                            stage1_text, tokenizer, None, generation_kwargs,
+                            use_vllm=True, vllm_model=vllm_model, sampling_params=sampling_params,
+                            max_tokens=150  # 정답 + 이유를 위한 충분한 토큰
+                        )
+                        passage_result = parse_stage1_output(stage1_output)
+                        passage_results.append(passage_result)
+                    
+                    # 토큰 길이 통계 (첫 번째 passage 기준)
+                    if passages:
+                        first_text = prepare_prompt(create_stage1_messages(passages[0], question), tokenizer)
+                        token_length = len(tokenizer.encode(first_text, add_special_tokens=False))
+                        token_lengths.append(token_length)
+                    
+                    # 2단계: 여러 passage 결과를 종합하여 최종 정답 선택
+                    if passage_results:
+                        stage2_messages = create_stage2_messages(question, passage_results)
+                        stage2_text = prepare_prompt(stage2_messages, tokenizer)
+                        stage2_output = generate_with_model(
+                            stage2_text, tokenizer, None, generation_kwargs,
+                            use_vllm=True, vllm_model=vllm_model, sampling_params=sampling_params,
+                            max_tokens=100  # 최종 정답만
+                        )
+                        answer = parse_stage2_output(stage2_output)
+                    else:
+                        answer = "없음"
                 
-                # vLLM 사용
-                outputs = vllm_model.generate([text], sampling_params)
-                generated_text = outputs[0].outputs[0].text
-                answer = generated_text.strip()
-                
-                # 빈 답변 처리
                 if not answer or len(answer) == 0:
                     answer = ""
                     
             except Exception as e:
                 logger.warning(f"Error generating answer for example {example_id}: {e}")
-                # 실패 시 빈 답변 반환
                 answer = ""
             
             # 메모리 정리 (각 예제 처리 후)
@@ -713,8 +952,12 @@ def run_mrc_generation(
             predictions[example_id] = answer
     else:
         # Transformers 사용 시 torch.no_grad() 필요
+        # 테스트를 위해 처음 5개만 처리
+        validation_dataset = datasets["validation"] # datasets["validation"].select(range(min(15, len(datasets["validation"]))))
+        logger.info(f"⚠️  TEST MODE: Processing only {len(validation_dataset)} examples")
+        
         with torch.no_grad():
-            for example in tqdm(datasets["validation"]):
+            for example in tqdm(validation_dataset):
                 question = example[question_column_name]
                 context = example[context_column_name]
                 example_id = example["id"]
@@ -722,48 +965,73 @@ def run_mrc_generation(
                 generation_kwargs = model_config["generation_kwargs"].copy()
                 
                 try:
-                    # QA 프롬프트 준비
-                    text = prepare_qa_prompt(context, question, tokenizer)
+                    prompt_template_tokens = get_stage1_prompt_tokens(question, tokenizer)
+                    max_passage_tokens = min(MAX_INPUT_LENGTH - prompt_template_tokens - 100, 6000)
                     
-                    # 토큰 길이 확인 (Transformers)
-                    encoded_before = tokenizer.encode(text, add_special_tokens=False)
-                    token_length_before = len(encoded_before)
-                    token_lengths.append(token_length_before)
+                    # Passage 단위로 처리할 리스트 가져오기
+                    passages = get_passages_for_processing(example, max_passage_tokens, tokenizer)
                     
-                    # Context 길이 제한으로 메모리 사용량 감소
-                    model_inputs = tokenizer(
-                        [text], 
-                        return_tensors="pt",
-                        truncation=True,
-                        max_length=MAX_INPUT_LENGTH,
-                    ).to(model.device)
-                    
-                    # 잘렸는지 확인
-                    token_length_after = model_inputs.input_ids.shape[1]
-                    if token_length_before > MAX_INPUT_LENGTH:
-                        truncated_count += 1
-                        logger.warning(
-                            f"Example {example_id}: Input token length ({token_length_before}) exceeds max_length ({MAX_INPUT_LENGTH}). "
-                            f"Truncated to {token_length_after} tokens. Context char length: {len(context)}"
+                    if len(passages) == 0:
+                        answer = "없음"
+                    elif len(passages) == 1:
+                        # 단일 passage인 경우 1단계만 수행
+                        stage1_messages = create_stage1_messages(passages[0], question)
+                        stage1_text = prepare_prompt(stage1_messages, tokenizer)
+                        stage1_output = generate_with_model(
+                            stage1_text, tokenizer, model, generation_kwargs,
+                            use_vllm=False, vllm_model=None, sampling_params=None,
+                            max_tokens=150
                         )
-                    
-                    # Generation
-                    generated_ids = model.generate(
-                        **model_inputs,
-                        **generation_kwargs,
-                        eos_token_id=tokenizer.eos_token_id,  # EOS 토큰으로 조기 종료
-                        pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id else tokenizer.eos_token_id,
-                    )
-                    
-                    # 입력 부분 제거하고 답변만 추출
-                    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
-                    answer = tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+                        passage_result = parse_stage1_output(stage1_output)
+                        answer = passage_result["answer"]
+                        
+                        # 토큰 길이 통계
+                        token_length_before = len(tokenizer.encode(stage1_text, add_special_tokens=False))
+                        token_lengths.append(token_length_before)
+                    else:
+                        # 여러 passage인 경우 2단계 추론 수행
+                        logger.info(f"Example {example_id}: Processing {len(passages)} passages")
+                        
+                        # 1단계: 각 passage에 대해 정답과 이유 생성
+                        passage_results = []
+                        for passage in passages:
+                            stage1_messages = create_stage1_messages(passage, question)
+                            stage1_text = prepare_prompt(stage1_messages, tokenizer)
+                            stage1_output = generate_with_model(
+                                stage1_text, tokenizer, model, generation_kwargs,
+                                use_vllm=False, vllm_model=None, sampling_params=None,
+                                max_tokens=150
+                            )
+                            passage_result = parse_stage1_output(stage1_output)
+                            passage_results.append(passage_result)
+                            
+                            # 메모리 정리
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        
+                        # 토큰 길이 통계 (첫 번째 passage 기준)
+                        if passages:
+                            first_text = prepare_prompt(create_stage1_messages(passages[0], question), tokenizer)
+                            token_length_before = len(tokenizer.encode(first_text, add_special_tokens=False))
+                            token_lengths.append(token_length_before)
+                        
+                        # 2단계: 여러 passage 결과를 종합하여 최종 정답 선택
+                        if passage_results:
+                            stage2_messages = create_stage2_messages(question, passage_results)
+                            stage2_text = prepare_prompt(stage2_messages, tokenizer)
+                            stage2_output = generate_with_model(
+                                stage2_text, tokenizer, model, generation_kwargs,
+                                use_vllm=False, vllm_model=None, sampling_params=None,
+                                max_tokens=100
+                            )
+                            answer = parse_stage2_output(stage2_output)
+                        else:
+                            answer = "없음"
                     
                     if not answer or len(answer) == 0:
                         answer = ""
                 except Exception as e:
                     logger.warning(f"Error generating answer for example {example_id}: {e}")
-                    # 실패 시 빈 답변 반환
                     answer = ""
                 
                 # 메모리 정리 (각 예제 처리 후)
@@ -787,7 +1055,9 @@ def run_mrc_generation(
     with open(csv_file, "w", encoding="utf-8") as f:
         writer = csv.writer(f, delimiter="\t")
         # 데이터셋의 원래 순서대로 저장 (베이스라인 코드와 동일)
-        for example in datasets["validation"]:
+        # validation_dataset이 정의되어 있으면 사용, 없으면 전체 데이터셋 사용
+        dataset_for_csv = validation_dataset if 'validation_dataset' in locals() else datasets["validation"]
+        for example in dataset_for_csv:
             example_id = example["id"]
             if example_id in predictions:
                 writer.writerow([example_id, predictions[example_id]])
@@ -831,13 +1101,15 @@ def run_mrc_generation(
         formatted_predictions = [
             {"id": k, "prediction_text": v} for k, v in predictions.items()
         ]
+        # validation_dataset이 정의되어 있으면 사용, 없으면 전체 데이터셋 사용
+        dataset_for_eval = validation_dataset if 'validation_dataset' in locals() else datasets["validation"]
         references = [
             {"id": ex["id"], "answers": ex[answer_column_name]}
-            for ex in datasets["validation"]
+            for ex in dataset_for_eval
         ]
         
         metrics = metric.compute(predictions=formatted_predictions, references=references)
-        metrics["eval_samples"] = len(datasets["validation"])
+        metrics["eval_samples"] = len(dataset_for_eval)
         
         # 평가 결과 출력 (run_mrc와 동일한 형식)
         logger.info("***** Evaluation results *****")

@@ -322,14 +322,14 @@ class SparseRetrieval:
             for idx, example in enumerate(
                 tqdm(query_or_dataset, desc="Sparse retrieval: ")
             ):
+                retrieved_passages = [self.contexts[pid] for pid in doc_indices[idx]]
                 tmp = {
                     # Query와 해당 id를 반환합니다.
                     "question": example["question"],
                     "id": example["id"],
                     # Retrieve한 Passage의 id, context를 반환합니다.
-                    "context": " ".join(
-                        [self.contexts[pid] for pid in doc_indices[idx]]
-                    ),
+                    "context": " ".join(retrieved_passages),  # 기존 호환성 유지
+                    "passages": retrieved_passages,  # 개별 passage 리스트 추가 (passage 단위 chunk 처리용)
                 }
                 if "context" in example.keys() and "answers" in example.keys():
                     # validation 데이터를 사용하면 ground_truth context와 answer도 반환합니다.
