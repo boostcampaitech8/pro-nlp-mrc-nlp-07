@@ -7,9 +7,9 @@ git clone https://{git username}:{PAT (github token (classic 추천))}@github.co
 cd pro-nlp-mrc-nlp-07
 ```
 ## 실험 내용
-[EXP] Ensemble(1208-hard)
-[EXP] Ensemble(1208-Power soft)
-외 Elasticsearch, Hybrid 등 Retriever 실험 및 uomnf97, monologg, CurtisJeon 등 Reader 실험
+[EXP] Ensemble(1208-hard)  
+[EXP] Ensemble(1208-Power soft)  
+외 Elasticsearch, Hybrid 등 Retriever 실험 및 uomnf97, monologg, CurtisJeon 등 Reader 실험  
 
 ## 커밋 메시지 작성 가이드
 
