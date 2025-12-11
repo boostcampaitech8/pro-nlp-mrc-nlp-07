@@ -1,9 +1,7 @@
-#!/bin/bash
-set -e
 
 # === [경로 설정] ===
 TEST_DATA_PATH="./data/test_dataset"
-SUBMISSION_DIR="./outputs/submission_tapt_roberta_2025"
+SUBMISSION_DIR="./outputs/bge-m3"
 
 # 모델 설정
 READER_MODEL_NAME="NLP-07-ODQA/roberta-large-tapt-n8-hybrid"
@@ -13,7 +11,7 @@ RERANK_MODEL_NAME="BAAI/bge-reranker-v2-m3"
 
 echo ""
 echo "----------------------------------------------------------------"
-echo " [Step 3] Inference"
+echo " Inference"
 echo "----------------------------------------------------------------"
 
 python inference_roberta.py \
@@ -24,4 +22,4 @@ python inference_roberta.py \
   --rerank_model_path ${RERANK_MODEL_NAME} \
   --do_predict
 
-echo "✅ TAPT Pipeline Finished!"
+echo "✅ Inference Pipeline Finished!"
