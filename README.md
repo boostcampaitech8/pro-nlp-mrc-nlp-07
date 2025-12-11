@@ -7,9 +7,9 @@ git clone https://{git username}:{PAT (github token (classic 추천))}@github.co
 cd pro-nlp-mrc-nlp-07
 ```
 ## 실험 내용
-[EXP] Hybrid + Rerank + klue-roberta-large(TAPT-seed=2025)
-[EXP] Ensemble(1208-soft 2:2:1:1)
-[EXP] Hybrid(K=5,15,20) + Rerank + klue-roberta-large(TAPT)
+[EXP] Hybrid + Rerank + klue-roberta-large(TAPT-seed=2025)  
+[EXP] Ensemble(1208-soft 2:2:1:1)  
+[EXP] Hybrid(K=5,15,20) + Rerank + klue-roberta-large(TAPT)  
 
 ## 커밋 메시지 작성 가이드
 
