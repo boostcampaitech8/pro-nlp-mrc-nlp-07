@@ -22,7 +22,8 @@ from datasets import (
     Value,
     load_from_disk,
 )
-from retrieval import SparseRetrieval, DenseRetrieval
+from retrieval import SparseRetrieval, DenseRetriever, DenseFineTuneRetriever
+from retrieval_hybrid import HybridRetriever
 from trainer_qa import QuestionAnsweringTrainer
 from transformers import (
     AutoConfig,
@@ -166,7 +167,7 @@ def run_sparse_retrieval(
     # )
     # retriever.get_sparse_embedding()
 
-    retriever = DenseRetrieval(
+    retriever = HybridRetriever(
         data_path=data_path, context_path=context_path
     )
 
@@ -178,8 +179,25 @@ def run_sparse_retrieval(
     else:
         df = retriever.retrieve(datasets["validation"], topk=data_args.top_k_retrieval)
 
+     # ⭐⭐⭐ Top-k 정확도 (Hit@K) 계산 및 출력 ⭐⭐⭐
+    if 'is_hit_at_k' in df.columns:
+        # True 값의 합계를 전체 데이터셋 길이로 나누어 정확도를 계산
+        top_k_accuracy = df["is_hit_at_k"].sum() / len(df)
+        # 결과 출력
+        print("=" * 60)
+        print(f"🎯 Retriever Evaluation Results (Top-K={data_args.top_k_retrieval})")
+        print(f"   Total Queries: {len(df)}")
+        print(f"   Top-K Hit Count: {df['is_hit_at_k'].sum()}")
+        print(f"   Top-K Accuracy (Hit@K): {top_k_accuracy:.4f}")
+        print("=" * 60)
+        df = df.drop(columns=['is_hit_at_k'])
+
     # test data 에 대해선 정답이 없으므로 id question context 로만 데이터셋이 구성됩니다.
     if training_args.do_predict:
+        # ⭐⭐⭐ [추가할 코드] answers 컬럼이 존재하면 삭제 ⭐⭐⭐
+        if "answers" in df.columns:
+            df = df.drop(columns=["answers"])
+            
         f = Features(
             {
                 "context": Value(dtype="string", id=None),
@@ -297,6 +315,38 @@ def run_mrc(
     )
 
     # Post-processing:
+    # def post_processing_function(
+    #     examples,
+    #     features,
+    #     predictions: Tuple[np.ndarray, np.ndarray],
+    #     training_args: TrainingArguments,
+    # ) -> EvalPrediction:
+    #     # Post-processing: start logits과 end logits을 original context의 정답과 match시킵니다.
+    #     predictions = postprocess_qa_predictions(
+    #         examples=examples,
+    #         features=features,
+    #         predictions=predictions,
+    #         max_answer_length=data_args.max_answer_length,
+    #         output_dir=training_args.output_dir,
+    #     )
+    #     # Metric을 구할 수 있도록 Format을 맞춰줍니다.
+    #     formatted_predictions = [
+    #         {"id": k, "prediction_text": v} for k, v in predictions.items()
+    #     ]
+
+    #     if training_args.do_predict:
+    #         return formatted_predictions
+    #     elif training_args.do_eval:
+    #         references = [
+    #             {"id": ex["id"], "answers": ex[answer_column_name]}
+    #             for ex in datasets["validation"]
+    #         ]
+
+    #         return EvalPrediction(
+    #             predictions=formatted_predictions, label_ids=references
+    #         )
+
+    # Post-processing:
     def post_processing_function(
         examples,
         features,
@@ -318,12 +368,25 @@ def run_mrc(
 
         if training_args.do_predict:
             return formatted_predictions
+        
         elif training_args.do_eval:
-            references = [
-                {"id": ex["id"], "answers": ex[answer_column_name]}
-                for ex in datasets["validation"]
-            ]
+            # ==========================================================
+            # ⭐ [수정] 정답지(References) 중복 제거 로직 추가
+            # 리트리버가 데이터를 20배로 불렸기 때문에, 정답지도 20배로 불어난 상태입니다.
+            # 질문 ID(id)를 기준으로 중복을 제거하여 240개만 남겨야 합니다.
+            # ==========================================================
+            seen_ids = set()
+            references = []
+            
+            for ex in datasets["validation"]:
+                # 이미 처리한 질문 ID라면 건너뜀
+                if ex["id"] in seen_ids:
+                    continue
+                
+                references.append({"id": ex["id"], "answers": ex[answer_column_name]})
+                seen_ids.add(ex["id"])
 
+            # 이제 len(predictions) == 240, len(references) == 240 으로 일치합니다.
             return EvalPrediction(
                 predictions=formatted_predictions, label_ids=references
             )

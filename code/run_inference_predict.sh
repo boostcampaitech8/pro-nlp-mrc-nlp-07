@@ -1,18 +1,18 @@
 #!/bin/bash
 
 # 로그 파일 이름 설정
-LOG_FILE="./inference_eval_output.log"
+LOG_FILE="./inference_predict_output2.log"
 
 # 실행할 Python 스크립트와 인자
 # --hub_model_repo_id ljy-base \
 # roberta-large-tapt-n8-hybrid
-PYTHON_COMMAND="python inference.py \
-    --output_dir ./outputs/inference_eval/ \
+PYTHON_COMMAND="python inference2.py \
+    --output_dir ./outputs/inference_predict/ \
     --overwrite_output_dir \
     --dataset_name ../data/train_dataset/ \
     --top_k_retrieval 20 \
     --hub_model_repo_id roberta-large-tapt-n8-hybrid \
-    --do_eval"
+    --do_predict"
 
 # --- 스크립트 실행 시작 ---
 

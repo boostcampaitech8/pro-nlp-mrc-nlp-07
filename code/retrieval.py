@@ -29,12 +29,230 @@ def timer(name):
     t0 = time.time()
     yield
     print(f"[{name}] done in {time.time() - t0:.3f} s")
+    """
+    ColBERTv2 모델(e.g., colbert-ir/colbertv2.0)을 위한 독립적인 Retriever 클래스.
+    
+    SentenceTransformer를 통해 모델을 로드하고, FAISS IndexFlatIP(내적)를 사용하여 검색합니다.
+    (실제 ColBERTv2의 Late Interaction 및 압축 인덱싱은 외부 라이브러리가 필요함)
+    """
+    
+    def __init__(
+        self,
+        model_name: str = "colbert-ir/colbertv2.0", # ColBERTv2 모델 이름 기본값
+        data_path: Optional[str] = "./data",
+        context_path: Optional[str] = "wikipedia_documents.json",
+        batch_size: int = 16, # 임베딩 시 배치 사이즈
+    ) -> NoReturn:
+        
+        self.model_name = model_name
+        self.data_path = data_path
+        self.batch_size = batch_size
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # 1. 데이터 로드 (DenseRetriever와 동일)
+        with open(os.path.join(data_path, context_path), "r", encoding="utf-8") as f:
+            wiki = json.load(f)
 
+        self.contexts = list(
+            dict.fromkeys([v["text"] for v in wiki.values()])
+        )
+        logger.info(f"Initialized ColBertV2Retriever with {len(self.contexts)} unique contexts")
+        self.ids = list(range(len(self.contexts)))
+
+        self.context_to_id = {
+            text: i for i, text in enumerate(self.contexts)
+        }
+        
+        # 2. 모델 로드 및 임베딩 준비
+        self.model = self._load_model(model_name)
+        self.p_embedding = None # Passage Embedding
+        self.indexer = None # FAISS Indexer
+        
+        # 3. 임베딩 계산/로드
+        self.get_dense_embedding() 
+        # 4. FAISS 인덱스 생성/로드
+        self.build_faiss() 
+
+    def _load_model(self, model_name):
+        """SentenceTransformer 모델 로드 함수 (독립적으로 구현)"""
+        try:
+            # SentenceTransformer가 ColBERTv2 모델을 로드할 수 있도록 시도
+            model = SentenceTransformer(model_name, trust_remote_code=True)
+            print(f"Loaded {model_name} via SentenceTransformer.")
+        except Exception:
+            print(f"Warning: {model_name} 로드 중 에러 발생. 일반 Transformer 방식으로 우회 시도...")
+            
+            try:
+                word_embedding_model = models.Transformer(model_name, max_seq_length=512)
+                pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension(), pooling_mode='mean')
+                model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
+            except Exception as e:
+                raise ImportError(f"ColBERTv2 모델 로드 실패: {model_name}. Error: {e}")
+            
+        model.max_seq_length = 512
+        model.to(self.device)
+        return model
+
+    def get_dense_embedding(self) -> NoReturn:
+        """Passage Embedding을 만들고 'colbertV2' 접미사를 붙여 저장하거나 로드합니다."""
+
+        base_name = self.model_name.replace('/', '_')
+        pickle_name = f"dense_embedding_{base_name}_colbertV2.bin" # 파일명에 접미사 추가
+        emd_path = os.path.join(self.data_path, pickle_name)
+
+        if os.path.isfile(emd_path):
+            logger.info("Loading pre-computed COLBERTV2 dense embeddings from cache")
+            with open(emd_path, "rb") as file:
+                self.p_embedding = pickle.load(file)
+            print("ColBERTv2 Embedding pickle load.")
+        else:
+            logger.info("Computing COLBERTV2 dense embeddings for passages")
+            print("Encoding Passages...")
+            
+            self.model.eval()
+            with torch.no_grad():
+                self.p_embedding = self.model.encode(
+                    self.contexts, 
+                    batch_size=self.batch_size, 
+                    show_progress_bar=True, 
+                    convert_to_numpy=True # FAISS를 위해 numpy로 변환
+                )
+                
+            logger.info(f"ColBERTv2 dense embedding shape: {self.p_embedding.shape}")
+            print(self.p_embedding.shape)
+
+            with open(emd_path, "wb") as file:
+                pickle.dump(self.p_embedding, file)
+            print("ColBERTv2 Embedding pickle saved.")
+
+    def build_faiss(self, n_list=100) -> NoReturn:
+        """Faiss indexer에 Passage Embedding을 fitting 시키거나 로드합니다."""
+
+        base_name = self.model_name.replace('/', '_')
+        indexer_name = f"faiss_dense_{base_name}_nlist{n_list}_colbertV2.index" # 파일명에 접미사 추가
+        indexer_path = os.path.join(self.data_path, indexer_name)
+
+        if os.path.isfile(indexer_path):
+            logger.info(f"Loading pre-built COLBERTV2 FAISS indexer from {indexer_path}")
+            self.indexer = faiss.read_index(indexer_path)
+            print("Load Saved ColBERTv2 Faiss Indexer.")
+
+        else:
+            logger.info(f"Building COLBERTV2 FAISS indexer for dense embeddings with n_list={n_list}")
+            
+            p_emb = self.p_embedding.astype(np.float32)
+            # IndexFlatIP를 위해 L2 정규화
+            faiss.normalize_L2(p_emb)
+            emb_dim = p_emb.shape[-1]
+            
+            self.indexer = faiss.IndexFlatIP(emb_dim) # 내적(Inner Product) 기반 인덱스
+            self.indexer.add(p_emb)
+            
+            faiss.write_index(self.indexer, indexer_path)
+            logger.info(f"ColBERTv2 FAISS indexer saved to {indexer_path}")
+            print("ColBERTv2 Faiss Indexer Saved.")
+
+    def retrieve(
+        self, query_or_dataset: Union[str, Dataset], topk: Optional[int] = 1
+    ) -> Union[Tuple[List, List], pd.DataFrame]:
+        """Dense Retrieval 수행 함수"""
+
+        assert (
+            self.indexer is not None
+        ), "build_faiss() 메소드를 먼저 수행해줘야합니다. (FAISS Index 로드)"
+
+        if isinstance(query_or_dataset, str):
+            doc_scores, doc_indices = self.get_relevant_doc_dense(query_or_dataset, k=topk)
+            print("[Search query]\n", query_or_dataset, "\n")
+
+            for i in range(topk):
+                print(f"Top-{i+1} passage with score {doc_scores[i]:.4f}")
+                print(self.contexts[doc_indices[i]])
+
+            return (doc_scores, [self.contexts[doc_indices[i]] for i in range(topk)])
+
+        elif isinstance(query_or_dataset, Dataset):
+            total = []
+            
+            with timer("query dense search"):
+                doc_scores, doc_indices = self.get_relevant_doc_bulk_dense(
+                    query_or_dataset["question"], k=topk
+                )
+
+            for idx, example in enumerate(
+                tqdm(query_or_dataset, desc="ColBERTv2 retrieval: ")
+            ):
+                tmp = {
+                    "question": example["question"],
+                    "id": example["id"],
+                    "context": " ".join(
+                        [self.contexts[pid] for pid in doc_indices[idx]]
+                    ),
+                }
+                if "context" in example.keys() and "answers" in example.keys():
+                    tmp["original_context"] = example["context"]
+                    tmp["answers"] = example["answers"]
+
+                    original_context_id = self.context_to_id.get(tmp["original_context"])
+                    is_hit_at_k = original_context_id in doc_indices[idx]
+                    tmp["is_hit_at_k"] = is_hit_at_k
+                    
+                total.append(tmp)
+                
+            return pd.DataFrame(total)
+
+
+    def get_relevant_doc_dense(self, query: str, k: Optional[int] = 1) -> Tuple[List, List]:
+        """단일 쿼리에 대한 Dense Embedding 및 FAISS 검색"""
+        
+        # ColBERT 모델은 별도의 Prefix가 필요하지 않거나, Query Prefix가 모델에 따라 다를 수 있음
+        # SentenceTransformer가 자체적으로 처리하도록 두고, 필요시 여기에 Prefix 추가
+        
+        self.model.eval()
+        with torch.no_grad():
+            query_embedding = self.model.encode(
+                [query], 
+                batch_size=1, 
+                show_progress_bar=False, 
+                convert_to_numpy=True
+            ).astype(np.float32)
+
+        # L2 정규화
+        faiss.normalize_L2(query_embedding)
+        
+        with timer("query faiss search"):
+            D, I = self.indexer.search(query_embedding, k)
+        
+        return D.tolist()[0], I.tolist()[0]
+
+    def get_relevant_doc_bulk_dense(
+        self, queries: List, k: Optional[int] = 1
+    ) -> Tuple[List, List]:
+        """다수 쿼리에 대한 Dense Embedding 및 FAISS 검색"""
+        
+        # ColBERT 모델은 별도의 Prefix가 필요하지 않거나, Query Prefix가 모델에 따라 다를 수 있음
+        
+        self.model.eval()
+        with torch.no_grad():
+            query_embeddings = self.model.encode(
+                queries, 
+                batch_size=self.batch_size, 
+                show_progress_bar=True, 
+                convert_to_numpy=True
+            ).astype(np.float32)
+            
+        # L2 정규화
+        faiss.normalize_L2(query_embeddings)
+
+        with timer("query faiss bulk search"):
+            D, I = self.indexer.search(query_embeddings, k)
+
+        return D.tolist(), I.tolist()
 
 class DenseRetriever:
     def __init__(
         self,
-        model_name: str = "BAAI/bge-m3", # 사용할 SentenceTransformer 모델 이름
+        model_name: str = "BM-K/KoSimCSE-roberta-multitask", # 사용할 SentenceTransformer 모델 이름
         data_path: Optional[str] = "./data",
         context_path: Optional[str] = "wikipedia_documents.json",
         batch_size: int = 16, # 임베딩 시 배치 사이즈
@@ -226,7 +444,8 @@ class DenseRetriever:
                         for rank in range(topk):
                             context = self.contexts[doc_indices[idx][rank]]
                             score = doc_scores_list[rank] 
-                            
+                            # ⭐⭐⭐ 디버깅 출력: 검색된 문맥 확인 ⭐⭐⭐
+                            logger.error(f"Rank {rank+1} | Score {score:.4f} | Context: {context[:50]}...")
                             scores.append(score)
                             contentLens.append(len(context))
                         
@@ -299,6 +518,95 @@ class DenseRetriever:
             D, I = self.indexer.search(query_embeddings, k)
 
         return D.tolist(), I.tolist()
+    
+
+class DenseFineTuneRetriever(DenseRetriever):
+    """
+    파인튜닝된 Dense 모델(BAAI/bge-m3 등) 전용 Retriever 클래스.
+    기존 DenseRetriever를 상속받아 임베딩 및 FAISS 파일명에 접미사를 추가하여
+    사전 학습 모델과 파일 충돌을 방지합니다.
+    """
+    
+    # ⭐ 생성자에서 model_name의 기본값을 파인튜닝된 경로로 지정하는 것이 일반적
+    def __init__(
+        self,
+        model_name: str = "./models/bge-m3-finetuned-odqa", # 파인튜닝된 로컬 경로 기본값
+        data_path: Optional[str] = "./data",
+        context_path: Optional[str] = "wikipedia_documents.json",
+        batch_size: int = 16,
+    ) -> NoReturn:
+        
+        # 부모 클래스(DenseRetriever)의 생성자를 호출하여 초기화 로직을 모두 상속받습니다.
+        super().__init__(model_name, data_path, context_path, batch_size)
+        
+        # 모델명은 이미 self.model_name에 저장되어 있습니다. (e.g., './models/bge-m3-finetuned-odqa')
+
+    def get_dense_embedding(self) -> NoReturn:
+        """
+        Overriding: 파일명에 'finetuned' 접미사를 추가합니다.
+        """
+        
+        # ⭐ 파일명에 접미사 추가: "_finetuned"
+        base_name = self.model_name.replace('/', '_')
+        pickle_name = f"dense_embedding_{base_name}_finetuned.bin" # 파일명 변경
+        emd_path = os.path.join(self.data_path, pickle_name)
+
+        if os.path.isfile(emd_path):
+            logger.info("Loading pre-computed FINETUNED dense embeddings from cache")
+            with open(emd_path, "rb") as file:
+                self.p_embedding = pickle.load(file)
+            print("Finetuned Embedding pickle load.")
+        else:
+            logger.info("Computing FINETUNED dense embeddings for passages")
+            print("Encoding Passages...")
+            
+            # 인코딩 로직은 부모 클래스(DenseRetriever)와 동일
+            self.model.eval()
+            with torch.no_grad():
+                self.p_embedding = self.model.encode(
+                    self.contexts, 
+                    batch_size=self.batch_size, 
+                    show_progress_bar=True, 
+                    convert_to_numpy=True
+                )
+                
+            logger.info(f"Finetuned dense embedding shape: {self.p_embedding.shape}")
+            print(self.p_embedding.shape)
+
+            with open(emd_path, "wb") as file:
+                pickle.dump(self.p_embedding, file)
+            print("Finetuned Embedding pickle saved.")
+
+    def build_faiss(self, n_list=100) -> NoReturn:
+        """
+        Overriding: 파일명에 'finetuned' 접미사를 추가합니다.
+        """
+
+        # ⭐ 파일명에 접미사 추가: "_finetuned"
+        base_name = self.model_name.replace('/', '_')
+        indexer_name = f"faiss_dense_{base_name}_nlist{n_list}_finetuned.index" # 파일명 변경
+        indexer_path = os.path.join(self.data_path, indexer_name)
+
+        if os.path.isfile(indexer_path):
+            logger.info(f"Loading pre-built FINETUNED FAISS indexer from {indexer_path}")
+            self.indexer = faiss.read_index(indexer_path)
+            print("Load Saved Finetuned Faiss Indexer.")
+
+        else:
+            logger.info(f"Building FINETUNED FAISS indexer for dense embeddings with n_list={n_list}")
+            
+            # FAISS 빌드 로직은 부모 클래스(DenseRetriever)와 동일
+            p_emb = self.p_embedding.astype(np.float32)
+            # L2 정규화 (코사인 유사도를 위해)
+            faiss.normalize_L2(p_emb)
+            emb_dim = p_emb.shape[-1]
+            
+            self.indexer = faiss.IndexFlatIP(emb_dim) 
+            self.indexer.add(p_emb)
+            
+            faiss.write_index(self.indexer, indexer_path)
+            logger.info(f"Finetuned FAISS indexer saved to {indexer_path}")
+            print("Finetuned Faiss Indexer Saved.")
 
 class SparseRetrieval:
     def __init__(
