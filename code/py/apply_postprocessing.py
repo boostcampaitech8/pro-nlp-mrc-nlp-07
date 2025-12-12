@@ -62,7 +62,7 @@ def main():
     with open(OUTPUT_SAFE_JSON, 'w', encoding='utf-8') as f:
         json.dump(dict_safe, f, indent=4, ensure_ascii=False)
 
-    print(f"✅ Safe Preprocessing Done!")
+    print(f" Safe Preprocessing Done!")
     print(f"   - JSON: {OUTPUT_SAFE_JSON}")
 
     # --- 변경된 내용 확인 ---
