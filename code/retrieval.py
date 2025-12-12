@@ -57,7 +57,7 @@ class ElasticSearchRetrieval:
         else:
             print("Elasticsearch index already exists.")
 
-        # 4. [NEW] Dense Retrieval (DPR) 설정
+        # 4. Dense Retrieval (DPR) 설정
         print(f"Loading Dense Retriever: {dense_model_name}...")
         self.dense_model = SentenceTransformer(dense_model_name, device=self.device)
         self.dense_embedding_path = os.path.join(data_path, "dense_embeddings.bin")

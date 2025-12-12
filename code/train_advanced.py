@@ -31,7 +31,7 @@ def main():
     # ============================================================
     # [핵심 수정] 에러 방지를 위한 파라미터 강제 할당 (주석 해제)
     # ============================================================
-    print("⚡ 설정을 강제로 적용합니다 (CLI 무시) ⚡")
+    print("설정을 강제로 적용합니다 (CLI 무시)")
     training_args.do_train = True
     training_args.do_eval = True                     # 평가 필수
     training_args.evaluation_strategy = "epoch"      # 에포크마다 평가
@@ -206,7 +206,7 @@ def main():
         
         # [로그 출력] 터미널에 잘 보이도록 출력
         print("\n" + "="*30)
-        print(f"✅ EVALUATION RESULT")
+        print(f"   EVALUATION RESULT")
         print(f"   Exact Match (EM): {results['exact_match']:.2f}")
         print(f"   F1 Score        : {results['f1']:.2f}")
         print("="*30 + "\n")
@@ -247,12 +247,12 @@ def main():
     )
 
     # 5. 학습 시작
-    print("🚀 Training Start with Advanced Techniques!")
+    print("  Training Start with Advanced Techniques!")
     trainer.train()
     
     # Best Model 저장
     trainer.save_model()
-    print(f"✅ Best Model Saved to {training_args.output_dir}")
+    print(f"  Best Model Saved to {training_args.output_dir}")
 
 if __name__ == "__main__":
     main()

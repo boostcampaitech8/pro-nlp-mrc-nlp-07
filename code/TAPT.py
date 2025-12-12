@@ -28,7 +28,6 @@ class TaptArguments:
         default="../data/train_dataset", 
         metadata={"help": "Path to dataset"}
     )
-    # [수정 1] output_dir 제거 (TrainingArguments와 충돌 방지)
 
 def main():
     parser = HfArgumentParser((TaptArguments, TrainingArguments))
@@ -102,7 +101,6 @@ def main():
     logger.info("Start TAPT (Masked Language Modeling)...")
     train_result = trainer.train()
     
-    # [수정 2] tapt_args.output_dir -> training_args.output_dir 사용
     trainer.save_model(training_args.output_dir)
     tokenizer.save_pretrained(training_args.output_dir)
     
