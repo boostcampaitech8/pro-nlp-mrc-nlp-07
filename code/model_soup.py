@@ -58,7 +58,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(base_info['path'])
     tokenizer.save_pretrained(OUTPUT_DIR)
     
-    print("✅ 완료!")
+    print("완료!")
 
 if __name__ == "__main__":
     main()
