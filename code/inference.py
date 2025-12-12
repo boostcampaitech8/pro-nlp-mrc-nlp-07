@@ -856,6 +856,7 @@ def run_mrc_generation(
         logger.info("Using transformers for generation")
     
     predictions = {}
+    passage_results_all = {}  # 각 예제의 passage_results 저장 (디버깅/분석용)
     
     # 토큰 길이 통계 수집
     token_lengths = []
@@ -917,6 +918,9 @@ def run_mrc_generation(
                             max_tokens=150  # 정답 + 이유를 위한 충분한 토큰
                         )
                         passage_result = parse_stage1_output(stage1_output)
+                        # passage와 question 정보 추가
+                        passage_result["question"] = question
+                        passage_result["passage"] = passage
                         passage_results.append(passage_result)
                     
                     # 토큰 길이 통계 (첫 번째 passage 기준)
@@ -927,6 +931,9 @@ def run_mrc_generation(
                     
                     # 2단계: 여러 passage 결과를 종합하여 최종 정답 선택
                     if passage_results:
+                        # passage_results 저장 (디버깅/분석용)
+                        passage_results_all[example_id] = passage_results
+                        
                         stage2_messages = create_stage2_messages(question, passage_results)
                         stage2_text = prepare_prompt(stage2_messages, tokenizer)
                         stage2_output = generate_with_model(
@@ -1003,6 +1010,9 @@ def run_mrc_generation(
                                 max_tokens=150
                             )
                             passage_result = parse_stage1_output(stage1_output)
+                            # passage와 question 정보 추가
+                            passage_result["question"] = question
+                            passage_result["passage"] = passage
                             passage_results.append(passage_result)
                             
                             # 메모리 정리
@@ -1017,6 +1027,9 @@ def run_mrc_generation(
                         
                         # 2단계: 여러 passage 결과를 종합하여 최종 정답 선택
                         if passage_results:
+                            # passage_results 저장 (디버깅/분석용)
+                            passage_results_all[example_id] = passage_results
+                            
                             stage2_messages = create_stage2_messages(question, passage_results)
                             stage2_text = prepare_prompt(stage2_messages, tokenizer)
                             stage2_output = generate_with_model(
@@ -1048,6 +1061,13 @@ def run_mrc_generation(
         json.dump(predictions, f, ensure_ascii=False, indent=4)
     
     logger.info(f"Predictions saved to {output_file}")
+    
+    # passage_results 저장 (디버깅/분석용)
+    if passage_results_all:
+        passage_results_file = os.path.join(training_args.output_dir, "passage_results.json")
+        with open(passage_results_file, "w", encoding="utf-8") as f:
+            json.dump(passage_results_all, f, ensure_ascii=False, indent=4)
+        logger.info(f"Passage results saved to {passage_results_file} (total: {len(passage_results_all)} examples)")
     
     # predictions_submit.csv 저장 (베이스라인 코드와 동일한 형식)
     # 데이터셋의 원래 순서를 유지하기 위해 데이터셋을 순회하면서 저장
