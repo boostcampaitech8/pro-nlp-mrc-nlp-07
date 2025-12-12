@@ -28,13 +28,13 @@ def main():
     
     # 만약 저장해둔 검색 결과 파일이 있다면? -> 로드 (시간 절약!)
     if os.path.exists(RETRIEVAL_CACHE_FILE):
-        print(f"📦 Found cached retrieval results! Loading from {RETRIEVAL_CACHE_FILE}...")
+        print(f"Found cached retrieval results! Loading from {RETRIEVAL_CACHE_FILE}...")
         retrieved_df = pd.read_csv(RETRIEVAL_CACHE_FILE)
-        print(f"✅ Loaded {len(retrieved_df)} items.")
+        print(f"Loaded {len(retrieved_df)} items.")
         
     # 없다면? -> 검색 수행 후 저장
     else:
-        print("🚀 No cache found. Running Retrieval from scratch...")
+        print("No cache found. Running Retrieval from scratch...")
         
         # 리트리버 초기화
         retriever = ElasticSearchRetrieval(
@@ -54,14 +54,14 @@ def main():
         retrieved_df = retriever.retrieve(dataset, topk=TOP_K_RETRIEVAL)
         
         # [중요] 결과 저장 (다음번엔 이걸 씁니다)
-        print(f"💾 Saving retrieval results to {RETRIEVAL_CACHE_FILE}...")
+        print(f"Saving retrieval results to {RETRIEVAL_CACHE_FILE}...")
         retrieved_df.to_csv(RETRIEVAL_CACHE_FILE, index=False)
-        print("✅ Retrieval Done & Saved!")
+        print("Retrieval Done & Saved!")
 
     # ---------------------------------------------------------
     # 2. LLM 모델 로드 (Inference 모드)
     # ---------------------------------------------------------
-    print(f"📂 Loading LLM Model from {MODEL_PATH}...")
+    print(f"Loading LLM Model from {MODEL_PATH}...")
     try:
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name = MODEL_PATH,
@@ -71,7 +71,7 @@ def main():
         )
         FastLanguageModel.for_inference(model)
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"Error loading model: {e}")
         print("학습이 완료되었는지, 경로가 맞는지 확인해주세요.")
         return
 
@@ -89,7 +89,7 @@ def main():
 """
 
     results = []
-    print("🚀 Generating Answers with LLM...")
+    print("Generating Answers with LLM...")
     
     # DataFrame을 순회하며 추론
     for idx, row in tqdm(retrieved_df.iterrows(), total=len(retrieved_df)):
@@ -118,17 +118,17 @@ def main():
             else:
                 answer = decoded.replace(input_text, "").strip()
         except Exception as e:
-            print(f"⚠️ Error generating for ID {row['id']}: {e}")
+            print(f"Error generating for ID {row['id']}: {e}")
             answer = "" # 에러 발생 시 빈칸 처리
         
         results.append({"id": row["id"], "text": answer})
 
     # 4. 저장
-    print(f"💾 Saving final submission to {OUTPUT_CSV}...")
+    print(f"Saving final submission to {OUTPUT_CSV}...")
     df = pd.DataFrame(results)
     df = df.rename(columns={"text": "PredictionString"})
     df.to_csv(OUTPUT_CSV, index=False)
-    print("✅ Inference Finished!")
+    print("Inference Finished!")
 
 if __name__ == "__main__":
     main()

@@ -41,7 +41,7 @@ def main():
     )
 
     # 3. 데이터 로드 및 혼합 (핵심 수정 부분)
-    print("🔄 Loading & Mixing Datasets...")
+    print("Loading & Mixing Datasets...")
 
     # (A) 원본 데이터 로드 (전체 사용)
     try:
@@ -64,7 +64,7 @@ def main():
             kor_dataset = load_dataset("disk", KORQUAD_PATH)["train"]
         except:
              # 만약 KorQuAD 폴더가 없다면 원본만 쓰도록 예외처리 (안전장치)
-             print("⚠️ Warning: KorQuAD dataset not found. Using Original only.")
+             print("Warning: KorQuAD dataset not found. Using Original only.")
              kor_dataset = None
 
     if kor_dataset:
@@ -95,7 +95,7 @@ def main():
 
     # 최종 셔플
     train_data = train_data.shuffle(seed=2025)
-    print(f"✅ Final Training Dataset Size: {len(train_data)}")
+    print(f"Final Training Dataset Size: {len(train_data)}")
 
     # 프롬프트 포맷
     alpaca_prompt = """Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.
@@ -163,12 +163,12 @@ def main():
         ),
     )
 
-    print(f"🚀 LLM Fine-tuning Start... (Size: {len(train_dataset)})")
+    print(f"LLM Fine-tuning Start... (Size: {len(train_dataset)})")
     trainer.train()
     
     model.save_pretrained(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
-    print(f"✅ Training Finished! Saved to {OUTPUT_DIR}")
+    print(f"Training Finished! Saved to {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     main()
