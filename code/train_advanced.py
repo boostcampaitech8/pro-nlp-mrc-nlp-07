@@ -22,32 +22,32 @@ from utils_qa import check_no_error, postprocess_qa_predictions
 logger = logging.getLogger(__name__)
 
 def main():
-    # 1. 설정 파싱
+    # [기존 로직 유지] 인자 파싱
     parser = HfArgumentParser(
         (ModelArguments, DataTrainingArguments, TrainingArguments)
     )
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    # ============================================================
-    # [핵심 수정] 에러 방지를 위한 파라미터 강제 할당 (주석 해제)
-    # ============================================================
-    print("설정을 강제로 적용합니다 (CLI 무시)")
+    # [수정] CLI 인자 의존성을 제거하고 학습 안정성을 위해 파라미터 강제 할당
+    # 의도: 명령어 실수로 인한 설정 오류(save/eval strategy 불일치 등) 방지 및 과적합 규제 적용
+    print("설정을 코드 내부에서 강제로 적용합니다 (CLI 인자 무시)")
+    
+    # 학습 및 평가 전략 동기화
     training_args.do_train = True
-    training_args.do_eval = True                     # 평가 필수
-    training_args.evaluation_strategy = "epoch"      # 에포크마다 평가
-    training_args.save_strategy = "epoch"            # 에포크마다 저장 (평가와 일치 필수)
-    training_args.load_best_model_at_end = True      # 최고 모델 로드
+    training_args.do_eval = True                     
+    training_args.evaluation_strategy = "epoch"      # 에포크마다 평가 수행
+    training_args.save_strategy = "epoch"            # 에포크마다 저장 (평가 전략과 일치 필수)
+    training_args.load_best_model_at_end = True      # 학습 종료 시 EM 점수가 가장 높은 모델 로드
     training_args.metric_for_best_model = "exact_match"
     training_args.greater_is_better = True
-    training_args.save_total_limit = 1
+    training_args.save_total_limit = 1               # 용량 최적화를 위해 베스트 모델 1개만 유지
     
-    # 과적합 방지 설정
-    training_args.label_smoothing_factor = 0.1
-    training_args.lr_scheduler_type = "cosine"
-    training_args.warmup_ratio = 0.1
-    # ============================================================
-
-    # 로깅 설정
+    # 과적합 방지를 위한 규제 설정
+    training_args.label_smoothing_factor = 0.1       # 정답에 대한 과신 방지
+    training_args.lr_scheduler_type = "cosine"       # 학습률을 부드럽게 감소
+    training_args.warmup_ratio = 0.1                 # 초기 학습 안정화
+    
+    # [기존 로직 유지] 로깅 설정
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
@@ -55,13 +55,21 @@ def main():
     )
     logger.info("Training/evaluation parameters %s", training_args)
 
-    # 시드 고정
+    # [기존 로직 유지] 시드 고정
     set_seed(training_args.seed)
 
-    # 2. 데이터셋 로드
+    # [기존 로직 유지] 데이터셋 로드
     datasets = load_from_disk(data_args.dataset_name)
 
-    # 3. 모델 & 토크나이저 로드
+    # [추가] Validation 데이터셋 부재 시 안전장치
+    # 의도: 데이터 병합 과정에서 검증셋이 누락되었을 경우 Train의 10%를 검증용으로 자동 분리
+    if "validation" not in datasets:
+        print("Validation 데이터가 확인되지 않아 Train의 10%를 검증용으로 분리합니다.")
+        split_datasets = datasets["train"].train_test_split(test_size=0.1, seed=training_args.seed)
+        datasets["train"] = split_datasets["train"]
+        datasets["validation"] = split_datasets["test"]
+
+    # [기존 로직 유지] 모델 및 토크나이저 로드
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, use_fast=True
@@ -71,19 +79,19 @@ def main():
         config=config,
     )
 
-    # 4. 전처리 (질문+지문 -> 토큰)
+    # [기존 로직 유지] 전처리 설정 (컬럼명 매핑 및 패딩 방향 확인)
     column_names = datasets["train"].column_names
     question_column_name = "question" if "question" in column_names else column_names[0]
     context_column_name = "context" if "context" in column_names else column_names[1]
     answer_column_name = "answers" if "answers" in column_names else column_names[2]
     pad_on_right = tokenizer.padding_side == "right"
 
-    # 오류 체크
+    # [기존 로직 유지] 오류 체크
     last_checkpoint, max_seq_length = check_no_error(
         data_args, training_args, datasets, tokenizer
     )
 
-    # 학습 데이터 전처리
+    # [기존 로직 유지] 학습 데이터 전처리 함수
     def prepare_train_features(examples):
         tokenized_examples = tokenizer(
             examples[question_column_name if pad_on_right else context_column_name],
@@ -139,6 +147,7 @@ def main():
 
         return tokenized_examples
 
+    # [기존 로직 유지] 학습 데이터셋 매핑
     train_dataset = datasets["train"]
     train_dataset = train_dataset.map(
         prepare_train_features,
@@ -148,7 +157,7 @@ def main():
         load_from_cache_file=not data_args.overwrite_cache,
     )
 
-    # 검증 데이터 전처리
+    # [기존 로직 유지] 검증 데이터 전처리 (Best Model 선정을 위해 필요)
     eval_dataset = datasets["validation"]
     
     def prepare_validation_features(examples):
@@ -186,37 +195,34 @@ def main():
         load_from_cache_file=not data_args.overwrite_cache,
     )
 
-    # Data Collator
+    # [기존 로직 유지] Data Collator
     data_collator = DataCollatorWithPadding(
         tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None
     )
 
-    # Metric 로드
+    # [기존 로직 유지] Metric 로드
     metric = evaluate.load("squad")
 
-    # [수정됨] compute_metrics 함수: post_processing 결과를 받아 EM/F1 계산 후 출력
+    # [수정] compute_metrics 함수 재정의
+    # 의도: Trainer 내부에서 매 에포크마다 평가를 수행할 때, 로그에 EM/F1 점수를 명확히 출력하기 위함
+    # 기존 코드에서는 compute_metrics=None 이었으나, 실시간 모니터링을 위해 구현함
     def compute_metrics(p):
-        # p는 post_processing_function의 리턴값 (list of tuples)입니다.
-        # [(prediction_dict, reference_dict), ...] 형태를 분리합니다.
         predictions = [x[0] for x in p]
         references = [x[1] for x in p]
         
-        # Metric 계산
         results = metric.compute(predictions=predictions, references=references)
         
-        # [로그 출력] 터미널에 잘 보이도록 출력
+        # 터미널 출력용 포맷팅
         print("\n" + "="*30)
-        print(f"   EVALUATION RESULT")
+        print(f"EVALUATION RESULT")
         print(f"   Exact Match (EM): {results['exact_match']:.2f}")
         print(f"   F1 Score        : {results['f1']:.2f}")
         print("="*30 + "\n")
         
-        # 로거에도 기록
         logger.info(f"Evaluation metrics: {results}")
-        
         return results
 
-    # Post Processing
+    # [기존 로직 유지] Post Processing 함수
     def post_processing_function(examples, features, predictions, stage="eval"):
         predictions = postprocess_qa_predictions(
             examples=examples,
@@ -233,7 +239,8 @@ def main():
         references = [{"id": ex["id"], "answers": ex[answer_column_name]} for ex in examples]
         return list(zip(formatted_predictions, references))
 
-    # Trainer 초기화
+    # [수정] Trainer 초기화 시 compute_metrics 연결
+    # 의도: 위에서 정의한 평가 로직을 Trainer에 연결하여 에포크마다 자동으로 실행되도록 함
     trainer = QuestionAnsweringTrainer(
         model=model,
         args=training_args,
@@ -243,16 +250,17 @@ def main():
         tokenizer=tokenizer,
         data_collator=data_collator,
         post_process_function=post_processing_function,
-        compute_metrics=compute_metrics, # [수정됨] 계산 함수 연결 (기존 None에서 변경)
+        compute_metrics=compute_metrics, # 변경됨: None -> compute_metrics
     )
 
-    # 5. 학습 시작
-    print("  Training Start with Advanced Techniques!")
+    # [수정] 학습 실행 흐름 단순화
+    # 의도: do_train, do_eval 분기 처리를 제거하고 한 번의 실행으로 학습, 평가, 베스트 모델 저장을 완료함
+    print("Training Start with Advanced Techniques")
     trainer.train()
     
     # Best Model 저장
     trainer.save_model()
-    print(f"  Best Model Saved to {training_args.output_dir}")
+    print(f"Best Model Saved to {training_args.output_dir}")
 
 if __name__ == "__main__":
     main()
