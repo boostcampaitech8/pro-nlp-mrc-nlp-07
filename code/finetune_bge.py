@@ -18,7 +18,7 @@ MODEL_NAME = "BAAI/bge-m3"
 TUNED_MODEL_PATH = "./models/bge-m3-finetuned-odqa"
 
 # 학습 하이퍼파라미터
-BATCH_SIZE = 16
+BATCH_SIZE = 8
 NUM_EPOCHS = 1
 WARMUP_STEPS = 50 
 LEARNING_RATE = 5e-6
@@ -40,48 +40,22 @@ def get_model(model_name: str) -> SentenceTransformer:
 
 def prepare_training_data(examples: List[dict]) -> List[InputExample]:
     """
-    Hard Negative가 포함된 리스트를 SentenceTransformer 학습 형식(InputExample)으로 변환합니다.
+    Hard Negative가 포함된 리스트를 [질문, 정답, 오답] 형태의 Triplet으로 변환합니다.
     """
     train_examples = []
     QUERY_PREFIX = "query: " 
     
-    print("Converting data to InputExample format...")
+    print("Converting data to InputExample format (Triplet)...")
     for example in tqdm(examples):
         question = QUERY_PREFIX + example['question']
         positive = example['positive_context']
         negatives = example['negative_contexts']
         
-        # 1. Positive 쌍 추가 (Anchor: Question, Positive: P+)
-        # 레이블을 torch.tensor(1.0) 대신 float(1.0)으로 수정
-        train_examples.append(InputExample(texts=[question, positive], label=1.0)) # <--- 수정
-        
-        # 2. Negative 쌍 추가 (Anchor: Question, Negative: P-)
+        # Hard Negative들을 순회하며 [질문, 정답, 오답] 세트를 만듭니다.
         for neg in negatives:
-             # 레이블을 torch.tensor(0.0) 대신 float(0.0)으로 수정
-             train_examples.append(InputExample(texts=[question, neg], label=0.0)) # <--- 수정
-             
-    return train_examples
-    """
-    Hard Negative가 포함된 리스트를 SentenceTransformer 학습 형식(InputExample)으로 변환합니다.
-    """
-    train_examples = []
-    # BGE 계열 모델은 Query에 'query: ' prefix를 필요로 합니다.
-    QUERY_PREFIX = "query: " 
-    
-    print("Converting data to InputExample format...")
-    for example in tqdm(examples):
-        question = QUERY_PREFIX + example['question']
-        positive = example['positive_context']
-        negatives = example['negative_contexts']
-        
-        # 1. Positive 쌍 추가 (Anchor: Question, Positive: P+)
-        # Loss 함수는 이 쌍의 유사도를 높이도록 학습합니다.
-        train_examples.append(InputExample(texts=[question, positive], label=torch.tensor(1.0)))
-        
-        # 2. Negative 쌍 추가 (Anchor: Question, Negative: P-)
-        # MultipleNegativesRankingLoss는 Anchor와 Negative의 유사도를 낮추도록 학습합니다.
-        for neg in negatives:
-             train_examples.append(InputExample(texts=[question, neg], label=torch.tensor(0.0)))
+            # label 인자는 MultipleNegativesRankingLoss에서 무시되므로 삭제했습니다.
+            # texts 리스트에 [Anchor, Positive, Negative] 순서로 넣어줍니다.
+            train_examples.append(InputExample(texts=[question, positive, neg]))
              
     return train_examples
 
