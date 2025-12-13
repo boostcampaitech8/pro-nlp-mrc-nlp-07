@@ -1,0 +1,17 @@
+## [설치 방법]
+# pip install -r requirements.txt
+# pip install transformers==4.39.3 --no-deps
+# pip install accelerate==0.30.0 --no-deps
+
+pandas==2.3.3
+evaluate==0.4.6
+python-dotenv
+numpy
+torch
+datasets
+tqdm
+sentence-transformers
+rank-bm25
+
+# faiss install (if you want to)
+# faiss-gpu
