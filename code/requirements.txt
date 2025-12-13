@@ -1,6 +1,9 @@
 ## [설치 방법]
+# python3.10 -m venv --system-site-packages ../../py310
+# source ../../py310/bin/activate
+# cd code
 # pip install -r requirements.txt
-# pip install transformers==4.39.3 --no-deps
+# pip install transformers --no-deps
 # pip install accelerate==0.30.0 --no-deps
 
 pandas==2.3.3
