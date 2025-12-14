@@ -6,8 +6,8 @@
 git clone https://{git username}:{PAT (github token (classic 추천))}@github.com/boostcampaitech8/pro-nlp-mrc-nlp-07.git
 cd pro-nlp-mrc-nlp-07
 ```
-## 실험 내용
-[EXP] Hybrid(K=20) + Rerank + klue-roberta-large(TAPT-new)
+## 내용
+train_advanced.py 피드백
 
 ## 커밋 메시지 작성 가이드
 

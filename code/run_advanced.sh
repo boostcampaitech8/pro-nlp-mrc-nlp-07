@@ -83,6 +83,7 @@ python inference_roberta.py \
   --do_predict \
   --max_seq_length ${MAX_SEQ_LEN} \
   --doc_stride ${DOC_STRIDE} \
+  --top_k_retrieval 20 \
   --overwrite_output_dir
 
 echo "🎉 All Done! Submission file ready at: ${SUBMISSION_DIR}"
