@@ -1,0 +1,50 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 데이터세트 (절대 커밋하면 안됨)
+# 폴더는 유지하되 내용물만 무시
+data/*
+!data/.gitkeep
+*.tar.gz
+*.zip
+*.csv
+*.json
+*.parquet
+
+# 모델 체크포인트 (Hugging Face에만 업로드)
+# 폴더는 유지하되 내용물만 무시
+code/models/*
+!code/models/.gitkeep
+code/outputs/*
+!code/outputs/.gitkeep
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# 로그 및 캐시
+*.log
+.cache/
+wandb/
+mlruns/
+
+# 환경 변수
+.env
+.env.local
