@@ -1,6 +1,8 @@
 # ODQA(Open-Domain Question Answering Competition)
 
+
 ---
+
 
 ## 개요
 
@@ -24,17 +26,18 @@
 
 ## 팀원
 
-| 이름 | 역할 | 담당 |
-|---|---|---|
-| <가을> | Reader model 중 Decoder-only LLM 성능 비교 실험 |
-| <박신지> | Sparse Retriever tokenizer 실험 및 Dense Retriever 단독 성능 비교 실험 |
-| <박희권> | Sparse Retriever, Reader base model 비교 |
-| <이준영> | Retriever 성능 개선 실험, Dense 파인튜닝 실험 |
-| <이형석> | 데이터 증강 기반 TAPT 및 Reader model 개선 실험, Ensemble |
+| 이름 | 역할 |
+|---|---|
+| 가을 | Reader model 중 Decoder-only LLM 성능 비교 실험 |
+| 박신지 | Sparse Retriever tokenizer 실험 및 Dense Retriever 단독 성능 비교 실험 |
+| 박희권 | Sparse Retriever, Reader base model 비교 |
+| 이준영 | Retriever 성능 개선 실험, Dense 파인튜닝 실험 |
+| 이형석 | 데이터 증강 기반 TAPT 및 Reader model 개선 실험, Ensemble |
 
 ---
 
 ## Wrap-Up Report / 문서
+
 [MRC-NLP-07 Wrap Up Report.pdf](https://github.com/user-attachments/files/25171997/MRC-NLP-07.Wrap.Up.Report.pdf)
 
 ---
