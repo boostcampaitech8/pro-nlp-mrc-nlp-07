@@ -12,7 +12,7 @@
 | 핵심 기능 | 질문에 관련된 문서를 찾는 Retriever와 찾아온 문서에서 질문에 대한 정답을 찾는 Reader로 구성됩니다. |
 | 프로젝트 구성 | 질문에 관련된 문서를 찾는 Retriever와 찾아온 문서에서 질문에 대한 정답을 찾는 Reader로 구성됩니다. |
 | 평가 지표 | Exact Match (EM) Score, F1 Score(참고용) |
-| 진행 기간 | <2025.12.03 ~ 2025.12.11> |
+| 진행 기간 | 2025.12.03 ~ 2025.12.11 |
 
 <img width="801" height="309" alt="image" src="https://github.com/user-attachments/assets/6258bf8c-61bb-4075-862f-d6a4412927f3" />
 
@@ -61,7 +61,8 @@ pro-nlp-mrc-nlp-07/
 ### `data/`
 - 원본 데이터, 전처리 데이터 및 문서 코퍼스를 저장합니다.
 
-
+> 📌 본 프로젝트의 주요 구현 코드와 실험 관련 로직은 아래 경로에 정리되어 있습니다.  
+> https://github.com/boostcampaitech8/pro-nlp-mrc-nlp-07/tree/lhs-06/code
 
 
 
