@@ -1,0 +1,10 @@
+# torch==2.1.0
+
+transformers==4.39.3 -no-deps
+accelerate==0.30.0 --no-deps
+pandas==2.3.3
+evaluate==0.4.6
+python-dotenv
+
+# faiss install (if you want to)
+faiss-gpu
